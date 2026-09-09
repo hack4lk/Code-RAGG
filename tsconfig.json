@@ -1,0 +1,26 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "rootDir": "./src",
+    "outDir": "./dist",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "allowImportingTsExtensions": true,
+    "rewriteRelativeImportExtensions": true
+  },
+  "include": [
+    "src",
+    "tests/test-bge.ts",
+    "tests/test-chat.ts",
+    "tests/test-embedding.ts",
+    "tests/test-rag.ts",
+    "server/server.ts",
+    "tests/search-test.ts",
+    "tests/reranker-test.ts",
+    "tests/db-test.ts",
+    "src/test-codeParser.ts"
+  ]
+}

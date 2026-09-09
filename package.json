@@ -1,0 +1,29 @@
+{
+  "name": "rag-demo",
+  "version": "1.0.0",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "ingest": "tsx src/ingest.ts",
+    "ingestCode": "tsx src/codeIngest.ts"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "devDependencies": {
+    "@types/express": "^5.0.6",
+    "@types/node": "^26.4.0",
+    "@types/pg": "^8.23.1",
+    "tsx": "^4.23.13",
+    "typescript": "npm:@typescript/typescript6@^6.0.2"
+  },
+  "dependencies": {
+    "@github/copilot-sdk": "^1.0.13",
+    "@huggingface/transformers": "^4.2.0",
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1",
+    "openai": "^6.49.0",
+    "pg": "^8.23.0"
+  }
+}
