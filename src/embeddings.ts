@@ -1,6 +1,7 @@
 import "dotenv/config";
 
 import { SearchResult } from "./search.ts";
+import { getFullDocumentsForAnswer } from "./search.ts";
 import {
   generateChatCompletion,
   streamChatCompletion,
@@ -34,13 +35,15 @@ export async function generateAnswer(
   question: string,
   documents: SearchResult[],
 ): Promise<string> {
-  const context = documents
-    .map((doc, index) => {
-      return `--- DOCUMENT ${index + 1} ---
-        Source: ${doc.source}
-        ${doc.content}`;
+  // Get full document content for top-scoring documents
+  const fullDocuments = await getFullDocumentsForAnswer(documents);
+
+  const context = fullDocuments
+    .map((doc) => {
+      return `--- DOCUMENT: ${doc.filename} ---
+${doc.content}`;
     })
-    .join("\n");
+    .join("\n\n");
 
   const systemPrompt = `
    You are a documentation assistant.
@@ -90,13 +93,15 @@ export async function streamAnswer(
   onToken: (token: string) => void,
   onUsage?: (usage: any) => void,
 ): Promise<void> {
-  const context = documents
-    .map((doc, index) => {
-      return `--- DOCUMENT ${index + 1} ---
-      Source: ${doc.source}
-      ${doc.content}`;
+  // Get full document content for top-scoring documents
+  const fullDocuments = await getFullDocumentsForAnswer(documents);
+
+  const context = fullDocuments
+    .map((doc) => {
+      return `--- DOCUMENT: ${doc.filename} ---
+${doc.content}`;
     })
-    .join("\n");
+    .join("\n\n");
 
   const systemPrompt = `
     You are a documentation assistant.

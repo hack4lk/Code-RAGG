@@ -1,5 +1,8 @@
 import { createEmbedding } from "./embeddings";
 import pool from "./db";
+import fs from "node:fs/promises";
+import path from "node:path";
+import "dotenv/config";
 
 export interface SearchResult {
   id: number;
@@ -62,6 +65,65 @@ export async function expandContext(
 
     return a.chunkIndex - b.chunkIndex;
   });
+}
+
+// Get full document content for top-scoring documents
+export async function getFullDocumentsForAnswer(
+  chunks: SearchResult[],
+): Promise<{ filename: string; content: string }[]> {
+  const RERANK_THRESHOLD = parseFloat(process.env.RERANK_THRESHOLD || "0.05");
+  const MAX_CONTEXT_DOCS = parseInt(process.env.MAX_CONTEXT_DOCS || "3");
+  const MAX_DOCUMENT_SIZE = parseInt(process.env.MAX_DOCUMENT_SIZE || "10240");
+  const DOCUMENTS_DIR = process.env.DOCUMENTS_DIR;
+
+  if (!DOCUMENTS_DIR) {
+    throw new Error("DOCUMENTS_DIR environment variable is not set");
+  }
+
+  // Filter chunks by rerank threshold and group by filename
+  const fileMap = new Map<string, SearchResult>();
+  
+  for (const chunk of chunks) {
+    // Check if chunk score meets threshold
+    if (chunk.score < RERANK_THRESHOLD) {
+      continue;
+    }
+
+    // Keep only the highest scoring chunk per file
+    if (!fileMap.has(chunk.source) || chunk.score > fileMap.get(chunk.source)!.score) {
+      fileMap.set(chunk.source, chunk);
+    }
+  }
+
+  // Sort by score and take top N documents
+  const topFiles = Array.from(fileMap.values())
+    .sort((a, b) => b.score - a.score)
+    .slice(0, MAX_CONTEXT_DOCS);
+
+  // Read full file content for each document
+  const results: { filename: string; content: string }[] = [];
+
+  for (const chunk of topFiles) {
+    try {
+      const filePath = path.join(DOCUMENTS_DIR, chunk.source);
+      let content = await fs.readFile(filePath, "utf-8");
+
+      // Truncate to max size
+      if (content.length > MAX_DOCUMENT_SIZE) {
+        content = content.substring(0, MAX_DOCUMENT_SIZE) + "\n...[truncated]";
+      }
+
+      results.push({
+        filename: chunk.source,
+        content,
+      });
+    } catch (error) {
+      console.error(`Failed to read document ${chunk.source}:`, error);
+      // Continue with next file instead of failing
+    }
+  }
+
+  return results;
 }
 
 export async function searchDocuments(
