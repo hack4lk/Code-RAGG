@@ -25,6 +25,31 @@ async function ingestCode() {
 
   console.log("Existing code chunks removed.");
 
+  // Helper function to detect if a function is a React component
+  function isReactComponent(chunk: any): boolean {
+    const name = chunk.symbolName || '';
+    const content = chunk.content || '';
+    
+    // React components typically:
+    // 1. Have a capitalized name (PascalCase)
+    // 2. Return JSX (contains JSX elements or Fragment syntax)
+    // 3. May use React hooks
+    
+    const isCapitalized = name.length > 0 && name[0] === name[0].toUpperCase();
+    
+    // Check for JSX return statements or hooks
+    const hasJSXReturn = /return\s*[(<]/.test(content) && (
+      /<[A-Z][\w.]*[\s>]/.test(content) ||  // JSX element with capitalized tag
+      content.includes('</>') ||              // Fragment closing tag
+      content.includes('</') ||               // Closing tag
+      content.includes('/>')                  // Self-closing tag
+    );
+    
+    const hasReactHooks = /use[A-Z]\w+\s*\(/.test(content);
+    
+    return isCapitalized && (hasJSXReturn || hasReactHooks);
+  }
+
   // Helper function to prepend entity type hints for better embedding encoding
   function getEmbeddingText(chunk: any): string {
     let text = chunk.content;
@@ -46,8 +71,12 @@ async function ingestCode() {
         break;
       case "method":
       case "function":
+        // Check if it looks like a React component
+        if (isReactComponent(chunk)) {
+          text = `React component: ${text}`;
+        }
+        break;
       default:
-        // Functions don't need special prefix
         break;
     }
     
