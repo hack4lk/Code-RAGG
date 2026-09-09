@@ -2,9 +2,26 @@ import { searchCode, CodeSearchResult } from "./codeSearch.js";
 import { findCallers } from "./codeCallers.js";
 import { findCallees } from "./codeCallees.js";
 import { findSymbolByName } from "./codeSymbols.js";
+import pool from "./db.js";
 import 'dotenv/config';
 
 const SEMANTIC_SEARCH_LIMIT = process.env.SEMANTIC_SEARCH_LIMIT ? parseInt(process.env.SEMANTIC_SEARCH_LIMIT) : 5;
+
+// Stop words to filter from query
+const STOP_WORDS = new Set([
+  'the', 'a', 'an', 'and', 'or', 'but', 'with', 'as', 'by', 'at', 'on',
+  'in', 'of', 'for', 'to', 'from', 'about', 'this', 'that', 'is', 'are',
+  'be', 'been', 'being', 'have', 'has', 'had', 'do', 'does', 'did',
+]);
+
+// Relationship keywords that indicate query intent
+const CALLERS_KEYWORDS = new Set([
+  'calls', 'called', 'uses', 'used', 'who', 'where', 'callers', 'calling'
+]);
+
+const CALLEES_KEYWORDS = new Set([
+  'call', 'calls', 'called', 'does', 'do', 'callees', 'calls'
+]);
 
 // Architecture keywords that should boost relevant entity types
 const ARCHITECTURE_KEYWORDS = {
@@ -62,49 +79,52 @@ export interface HybridCodeSearchResult extends Omit<
   retrieval: ("semantic" | "target" | "caller" | "callee")[];
 }
 
-function getRelationshipDirection(
+// Parse query to extract symbol name and relationship intent
+// Returns both the symbol and the type of relationship to search for
+async function parseQueryIntent(
   query: string,
-): "callers" | "callees" | "both" {
+): Promise<{ symbol: string | null; intent: "callers" | "callees" | "both" }> {
   const normalized = query.toLowerCase();
-
-  if (normalized.includes("what does") && normalized.includes("call")) {
-    return "callees";
-  }
-
+  
+  // Detect relationship intent
+  let intent: "callers" | "callees" | "both" = "both";
+  
+  const hasCallersKeywords = Array.from(CALLERS_KEYWORDS).some(kw => normalized.includes(kw));
+  const hasCalleesKeywords = Array.from(CALLEES_KEYWORDS).some(kw => normalized.includes(kw));
+  
+  // More specific detection for common patterns
   if (normalized.includes("what calls") || normalized.includes("who calls")) {
-    return "callers";
+    intent = "callers";
+  } else if (normalized.includes("what does") && normalized.includes("call")) {
+    intent = "callees";
+  } else if (normalized.includes("who uses") || (normalized.includes("where is") && normalized.includes("used"))) {
+    intent = "callers";
+  } else if (hasCalleesKeywords && !hasCallersKeywords) {
+    intent = "callees";
+  } else if (hasCallersKeywords && !hasCalleesKeywords) {
+    intent = "callers";
   }
-
-  if (
-    normalized.includes("who uses") ||
-    (normalized.includes("where is") && normalized.includes("used"))
-  ) {
-    return "callers";
-  }
-
-  return "both";
-}
-
-function extractSymbolName(query: string): string | null {
-  const patterns = [
-    /what is ([a-zA-Z0-9_$]+)/i,
-    /what's ([a-zA-Z0-9_$]+)/i,
-    /what calls ([a-zA-Z0-9_$]+)/i,
-    /who calls ([a-zA-Z0-9_$]+)/i,
-    /what does ([a-zA-Z0-9_$]+) call/i,
-    /who uses ([a-zA-Z0-9_$]+)/i,
-    /where is ([a-zA-Z0-9_$]+) used/i,
-  ];
-
-  for (const pattern of patterns) {
-    const match = query.match(pattern);
-
-    if (match?.[1]) {
-      return match[1];
+  
+  // Extract symbol: remove all stop words and relationship keywords
+  const allNoise = new Set([...STOP_WORDS, ...CALLERS_KEYWORDS, ...CALLEES_KEYWORDS, 'function', 'component', 'class', 'method', 'interface', 'type', 'what', 'how', 'when', 'why', 'can', 'could', 'should', 'would']);
+  const tokens = normalized
+    .split(/\s+/)
+    .filter(token => !allNoise.has(token) && token.length > 0);
+  
+  // Try to find exact match in DB, prioritizing longer tokens
+  const sortedTokens = tokens.sort((a, b) => b.length - a.length);
+  
+  for (const token of sortedTokens) {
+    const result = await pool.query(
+      `SELECT symbol_name FROM code_chunks WHERE LOWER(symbol_name) = $1 LIMIT 1`,
+      [token]
+    );
+    if (result.rows.length > 0) {
+      return { symbol: result.rows[0].symbol_name, intent };
     }
   }
-
-  return null;
+  
+  return { symbol: null, intent };
 }
 
 function addResult(
@@ -164,17 +184,17 @@ export async function hybridCodeSearch(
   }
 
   // --------------------------------------------------
-  // Stage 2: Try pattern-based symbol extraction
+  // Stage 2: Try symbol extraction with intent detection
   // If successful, include the symbol and its relationships
-  // as a fast-path optimization (doesn't fail if pattern fails)
+  // as a fast-path optimization (doesn't fail if extraction fails)
   // --------------------------------------------------
 
-  const targetSymbol = extractSymbolName(query);
+  const { symbol: targetSymbol, intent: relationshipIntent } = await parseQueryIntent(query);
   if (targetSymbol) {
     const target = await findSymbolByName(targetSymbol);
 
     if (target) {
-      const direction = getRelationshipDirection(query);
+      const direction = relationshipIntent;
       
       // Add the target itself
       addResult(results, target, "target", null);
@@ -197,17 +217,14 @@ export async function hybridCodeSearch(
   }
 
   // --------------------------------------------------
-  // Stage 3: Detect relationship intent and enhance
-  // semantic results with their relationships
+  // Stage 3: Enhance semantic results with relationships
+  // if the query indicates relationship intent
   // This provides relationship context even if symbol
   // extraction didn't work
   // --------------------------------------------------
 
-  const hasRelationshipKeywords = 
-    query.toLowerCase().match(/\b(calls?|called|uses?|used|callers?|callees?|who|where)\b/i);
-
-  if (hasRelationshipKeywords && semanticResults.length > 0) {
-    const direction = getRelationshipDirection(query);
+  if (relationshipIntent !== "both" && semanticResults.length > 0) {
+    const direction = relationshipIntent;
 
     for (const result of semanticResults) {
       if (direction === "callers" || direction === "both") {
