@@ -341,6 +341,8 @@ Refer to [API Documentation](./documents/api.md) for detailed endpoint specifica
 
 ### Web Interface
 
+![Web Interface](./screenshots/assistant.png)
+
 Access the **Code-RAGG Assistant** web interface:
 
 - Open `http://localhost:3000` in your browser
