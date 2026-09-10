@@ -3,7 +3,8 @@ import {
   AutoModelForSequenceClassification,
 } from "@huggingface/transformers";
 
-import { SearchResult } from "./documentSearch.js";
+import { SearchResult } from "./types.js";
+import { logger } from "../infrastructure/logger.js";
 
 const MODEL = "Xenova/bge-reranker-base";
 
@@ -12,7 +13,7 @@ let model: any;
 
 async function loadModel() {
   if (!tokenizer || !model) {
-    console.log("Loading BGE reranker...");
+    logger.info("Loading BGE reranker");
 
     tokenizer = await AutoTokenizer.from_pretrained(MODEL);
 
@@ -20,7 +21,7 @@ async function loadModel() {
       dtype: "q8",
     });
 
-    console.log("BGE reranker loaded.");
+    logger.info("BGE reranker loaded");
   }
 }
 

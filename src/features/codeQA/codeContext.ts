@@ -6,11 +6,11 @@ export interface CodeContext {
 }
 
 function getRelationshipDescription(result: CodeRerankerResult): string {
-  if (result.retrieval.includes("caller")) {
+  if (result.retrieval?.includes("caller")) {
     return "This symbol calls the target symbol.";
   }
 
-  if (result.retrieval.includes("callee")) {
+  if (result.retrieval?.includes("callee")) {
     return "The target symbol calls this symbol.";
   }
 
@@ -34,15 +34,15 @@ function getRelationshipDescription(result: CodeRerankerResult): string {
 }
 
 function getSectionTitle(result: CodeRerankerResult): string {
-  if (result.retrieval.includes("caller")) {
+  if (result.retrieval?.includes("caller")) {
     return "CALLER";
   }
 
-  if (result.retrieval.includes("callee")) {
+  if (result.retrieval?.includes("callee")) {
     return "CALLEE";
   }
 
-  if (result.retrieval.includes("target")) {
+  if (result.retrieval?.includes("target")) {
     return "TARGET";
   }
 
@@ -85,10 +85,10 @@ export function buildCodeContext(
 
     // If this result has imported_by information, add a separate section
     if (
-      result.metadata?.relationships?.imported_by &&
-      Array.isArray(result.metadata.relationships.imported_by)
+      (result.metadata as any)?.relationships?.imported_by &&
+      Array.isArray((result.metadata as any).relationships.imported_by)
     ) {
-      const importedBy = result.metadata.relationships.imported_by;
+      const importedBy = (result.metadata as any).relationships.imported_by;
       const importSummary = importedBy
         .map(
           (imp: any) =>

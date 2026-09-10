@@ -1,16 +1,12 @@
 import { hybridDocumentSearch, expandContext, SearchResult } from "../../retrieval/documentSearch.js";
 import { rerank } from "../../retrieval/reranker.js";
 import { generateAnswer } from "../../core/embeddings.js";
+import { config } from "../../infrastructure/configSchema.js";
+import { logger } from "../../infrastructure/logger.js";
 
-const RERANK_THRESHOLD = process.env.RERANK_THRESHOLD
-  ? parseFloat(process.env.RERANK_THRESHOLD)
-  : 0.02;  // Lowered from 0.05: keyword matches usually score lower than semantic matches
-const PG_SEARCH_LIMIT = process.env.PG_SEARCH_LIMIT
-  ? parseInt(process.env.PG_SEARCH_LIMIT)
-  : 10;
-const MAX_CONTEXT_DOCS = process.env.MAX_CONTEXT_DOCS
-  ? parseInt(process.env.MAX_CONTEXT_DOCS)
-  : 3;
+const RERANK_THRESHOLD = config.reranking.documentThreshold;
+const PG_SEARCH_LIMIT = config.search.pgLimit;
+const MAX_CONTEXT_DOCS = config.search.maxContextDocs;
 
 export interface DocumentQAResult {
   answer: string;
@@ -31,14 +27,14 @@ export interface DocumentQAResult {
 export async function answerDocumentQuestion(
   question: string
 ): Promise<DocumentQAResult> {
-  console.log(`\n[DocumentQA] Processing question: "${question}"`);
+  logger.debug("Processing document question", { question });
   
   // 1. Hybrid search (semantic + keyword fallback)
   const documents = await hybridDocumentSearch(question, PG_SEARCH_LIMIT);
-  console.log(`[DocumentQA] Hybrid search returned ${documents.length} documents`);
+  logger.debug(`Hybrid search returned ${documents.length} documents`);
 
   if (documents.length === 0) {
-    console.log(`[DocumentQA] No documents found, returning empty answer`);
+    logger.debug("No documents found");
     return {
       answer: "I don't have enough information in the documentation to answer that.",
       sources: [],
@@ -47,20 +43,17 @@ export async function answerDocumentQuestion(
 
   // 2. Rerank
   const rerankedDocuments = await rerank(question, documents);
-  console.log(`[DocumentQA] Reranked ${rerankedDocuments.length} documents`);
-  rerankedDocuments.forEach((doc, i) => {
-    console.log(`  [${i + 1}] Score: ${(doc.rerankerScore ?? 0).toFixed(3)} | Source: ${doc.source}`);
-  });
+  logger.debug(`Reranked ${rerankedDocuments.length} documents`);
 
   // 3. Filter by threshold
   const relevantDocuments = rerankedDocuments
     .filter((doc) => (doc.rerankerScore ?? 0) >= RERANK_THRESHOLD)
     .slice(0, MAX_CONTEXT_DOCS);
   
-  console.log(`[DocumentQA] After threshold filter (>= ${RERANK_THRESHOLD}): ${relevantDocuments.length} documents`);
+  logger.debug(`Filtered to ${relevantDocuments.length} documents above threshold`);
 
   if (relevantDocuments.length === 0) {
-    console.log(`[DocumentQA] No documents passed rerank threshold, returning empty answer`);
+    logger.debug("No documents passed threshold");
     return {
       answer: "I don't have enough information in the documentation to answer that.",
       sources: [],
@@ -74,8 +67,8 @@ export async function answerDocumentQuestion(
   return {
     answer,
     sources: expandedDocuments.map((doc: SearchResult) => ({
-      file: doc.source,
-      chunkIndex: doc.chunkIndex,
+      file: doc.location,
+      chunkIndex: doc.documentChunkIndex ?? 0,
     })),
   };
 }

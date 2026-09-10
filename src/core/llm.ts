@@ -1,13 +1,13 @@
 import "dotenv/config";
 import { getLMStudioTokenUsage } from "./tokenUsage";
+import { config } from "../infrastructure/configSchema.js";
 
-const MODEL_PROVIDER = process.env.MODEL_PROVIDER || "lm_studio";
-const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-4";
-const LM_STUDIO_URL = process.env.LM_STUDIO_URL || "http://localhost:1234/v1";
-const CHAT_MODEL = process.env.CHAT_MODEL;
-const OPENAI_API_URL =
-  process.env.OPENAI_API_URL || "https://api.openai.com/v1";
+const MODEL_PROVIDER = config.models.provider;
+const OPENAI_API_KEY = config.models.openai.apiKey;
+const OPENAI_MODEL = config.models.openai.chatModel;
+const LM_STUDIO_URL = config.models.lmStudio.url;
+const CHAT_MODEL = config.models.lmStudio.chatModel;
+const OPENAI_API_URL = config.models.openai.url;
 
 export interface ChatMessage {
   role: "system" | "user" | "assistant";

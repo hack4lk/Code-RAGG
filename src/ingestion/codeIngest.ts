@@ -1,29 +1,27 @@
 import "dotenv/config";
+import { logger } from "../infrastructure/logger";
 
-import pool from "../core/db.js";
+import { codeRepository } from "../core/repository.js";
 import { parseCodebase } from "../parsing/codebase.js";
 import { createEmbedding } from "../core/embeddings.js";
+import { config } from "../infrastructure/configSchema.js";
 
 async function ingestCode() {
-  console.log("Starting code ingestion...\n");
+  logger.info("Starting code ingestion");
 
-  const sourceDirectory = process.env.CODE_SOURCE_DIRECTORY;
+  const sourceDirectory = config.filesystem.codeSourceDirectory;
 
-  if (!sourceDirectory) {
-    throw new Error("CODE_SOURCE_DIRECTORY environment variable is not set.");
-  }
-
-  console.log(`Source directory: ${sourceDirectory}`);
+  logger.info(`Source directory: ${sourceDirectory}`);
 
   const chunks = parseCodebase(sourceDirectory);
 
-  console.log(`\nParsed ${chunks.length} code chunks.`);
+  logger.info(`Parsed ${chunks.length} code chunks`);
 
-  console.log("\nRemoving existing code chunks...");
+  logger.info("Removing existing code chunks");
 
-  await pool.query("DELETE FROM code_chunks");
+  await codeRepository.deleteAll();
 
-  console.log("Existing code chunks removed.");
+  logger.info("Existing code chunks removed");
 
   // Helper function to detect if a function is a React component
   function isReactComponent(chunk: any): boolean {
@@ -84,7 +82,7 @@ async function ingestCode() {
   }
 
   for (const chunk of chunks) {
-    console.log(`Embedding and inserting ${chunk.filePath}:${chunk.symbolName} (${chunk.symbolType})`);
+    logger.debug(`Embedding: ${chunk.filePath}:${chunk.symbolName}`);
     
     const callCount = chunk.metadata.calls.length;
     const externalCallCount = chunk.metadata.externalCalls.length;
@@ -92,7 +90,7 @@ async function ingestCode() {
     const hasRelationships = chunk.metadata.relationships && Object.keys(chunk.metadata.relationships).length > 0;
     
     if (callCount > 0 || externalCallCount > 0 || depCount > 0) {
-      console.log(`  Metadata: ${callCount} internal calls, ${externalCallCount} external calls, ${depCount} dependencies`);
+      logger.debug(`  Metadata: ${callCount} internal, ${externalCallCount} external, ${depCount} dependencies`);
     }
     
     if (hasRelationships && chunk.metadata.relationships) {
@@ -103,53 +101,36 @@ async function ingestCode() {
         rel.type_deps?.length && `type_deps: ${rel.type_deps.map((t: any) => t.name).join(', ')}`,
       ].filter(Boolean);
       if (relDetails.length > 0) {
-        console.log(`  Relationships: ${relDetails.join('; ')}`);
+        logger.debug(`  Relationships: ${relDetails.join('; ')}`);
       }
     }
     
     if (chunk.metadata.architecturalRole) {
-      console.log(`  Architectural role: ${chunk.metadata.architecturalRole}`);
+      logger.debug(`  Architectural role: ${chunk.metadata.architecturalRole}`);
     }
 
     const embeddingText = getEmbeddingText(chunk);
     const embedding = await createEmbedding(embeddingText);
 
-    await pool.query(
-      `
-      INSERT INTO code_chunks (
-        file_path,
-        symbol_name,
-        symbol_type,
-        start_line,
-        end_line,
-        content,
-        metadata,
-        embedding
-      )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-      `,
-      [
-        chunk.filePath,
-        chunk.symbolName,
-        chunk.symbolType,
-        chunk.startLine,
-        chunk.endLine,
-        chunk.content,
-        JSON.stringify(chunk.metadata),
-        JSON.stringify(embedding),
-      ],
-    );
+    await codeRepository.insertChunk({
+      filePath: chunk.filePath,
+      symbolName: chunk.symbolName,
+      symbolType: chunk.symbolType,
+      startLine: chunk.startLine,
+      endLine: chunk.endLine,
+      content: chunk.content,
+      embedding,
+      metadata: chunk.metadata,
+    });
   }
 
-  console.log(`\nInserted ${chunks.length} code chunks.`);
+  logger.info(`Inserted ${chunks.length} code chunks`);
 
-  await pool.end();
-
-  console.log("Code ingestion complete!");
+  logger.info("Code ingestion complete");
 }
 
 ingestCode().catch((error) => {
-  console.error("Code ingestion failed:", error);
+  logger.error("Code ingestion failed", { error: String(error) });
 
   process.exit(1);
 });

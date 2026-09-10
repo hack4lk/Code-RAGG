@@ -4,13 +4,19 @@ import { searchDocuments, expandContext } from "../retrieval/documentSearch";
 import { generateAnswer, streamAnswer, streamCodeAnswer } from "../core/embeddings";
 import { rerank } from "../retrieval/reranker";
 import { answerCodeQuestion } from "../features/codeQA/codeAnswer";
+import { config, validateConfig } from "./configSchema";
+import { formatSearchResultsForAPI, formatSearchResultForLogging } from "./responseFormatting";
+import { logger } from "./logger";
 import 'dotenv/config';
 
+// Validate configuration at startup (fail fast if env vars are missing or invalid)
+validateConfig();
+
 const app = express();
-const port = process.env.PORT || 3000;
-const RERANK_THRESHOLD = process.env.RERANK_THRESHOLD ? parseFloat(process.env.RERANK_THRESHOLD) : 0.05;
-const PG_SEARCH_LIMIT = process.env.PG_SEARCH_LIMIT ? parseInt(process.env.PG_SEARCH_LIMIT) : 10;
-const MAX_CONTEXT_DOCS = process.env.MAX_CONTEXT_DOCS ? parseInt(process.env.MAX_CONTEXT_DOCS) : 3;
+const port = config.server.port;
+const RERANK_THRESHOLD = config.reranking.documentThreshold;
+const PG_SEARCH_LIMIT = config.search.pgLimit;
+const MAX_CONTEXT_DOCS = config.search.maxContextDocs;
 
 app.use(express.json());
 app.use(express.static(path.join(process.cwd(), "public")));
@@ -26,7 +32,7 @@ app.post("/api/chat", async (req, res) => {
       });
     }
 
-    console.log("Received question:", question);
+    logger.debug("Received question:", { question });
 
     // 1. Retrieve candidate documents from PostgreSQL
     const documents = await searchDocuments(question, PG_SEARCH_LIMIT);
@@ -39,21 +45,12 @@ app.post("/api/chat", async (req, res) => {
       });
     }
 
-    console.log(`Retrieved ${documents.length} documents`);
+    logger.debug(`Retrieved ${documents.length} documents`);
 
     // 2. Rerank the retrieved documents
     const rerankedDocuments = await rerank(question, documents);
 
-    console.log("\nReranked documents:");
-
-    for (const doc of rerankedDocuments) {
-      console.log({
-        file: doc.source,
-        chunk: doc.chunkIndex,
-        vectorScore: doc.score,
-        rerankerScore: doc.rerankerScore,
-      });
-    }
+    logger.debug("Reranked documents");
 
     // 3. Only send the best documents to the LLM
     const relevantDocuments = rerankedDocuments
@@ -62,14 +59,7 @@ app.post("/api/chat", async (req, res) => {
 
     const expandedDocuments = await expandContext(relevantDocuments);
 
-    console.log("\nDocuments sent to LLM:");
-
-    for (const doc of expandedDocuments) {
-      console.log("\n---");
-      console.log(`Source: ${doc.source}`);
-      console.log(`Chunk: ${doc.chunkIndex}`);
-      console.log(doc.content);
-    }
+    logger.debug(`Sending ${expandedDocuments.length} documents to LLM`);
 
     // 4. Generate answer using the reranked documents
     const answer = await generateAnswer(question, expandedDocuments);
@@ -77,14 +67,14 @@ app.post("/api/chat", async (req, res) => {
     res.json({
       answer,
       sources: expandedDocuments.map((doc) => ({
-        file: doc.source,
-        chunk: doc.chunkIndex,
+        file: doc.location,
+        chunk: doc.documentChunkIndex,
         score: doc.score,
         rerankerScore: doc.rerankerScore,
       })),
     });
   } catch (e) {
-    console.error(e);
+    logger.error("Error in /api/chat", { error: String(e) });
     res.status(500).send("Internal Server Error");
   }
 });
@@ -100,7 +90,7 @@ app.post("/api/chat/stream", async (req, res) => {
       });
     }
 
-    console.log("Received streaming question:", question);
+    logger.debug("Received streaming question", { question });
 
     // -----------------------------
     // 1. Vector search
@@ -116,7 +106,7 @@ app.post("/api/chat/stream", async (req, res) => {
       });
     }
 
-    console.log(`Retrieved ${documents.length} documents`);
+    logger.debug(`Retrieved ${documents.length} documents`);
 
     // -----------------------------
     // 2. Reranking
@@ -124,16 +114,7 @@ app.post("/api/chat/stream", async (req, res) => {
 
     const rerankedDocuments = await rerank(question, documents);
 
-    console.log("\nReranked documents:");
-
-    for (const doc of rerankedDocuments) {
-      console.log({
-        file: doc.source,
-        chunk: doc.chunkIndex,
-        vectorScore: doc.score,
-        rerankerScore: doc.rerankerScore,
-      });
-    }
+    logger.debug("Reranked documents");
 
     // -----------------------------
     // 3. Apply relevance threshold
@@ -149,14 +130,7 @@ app.post("/api/chat/stream", async (req, res) => {
 
     const expandedDocuments = await expandContext(relevantDocuments);
 
-    console.log("\nDocuments sent to LLM:");
-
-    for (const doc of expandedDocuments) {
-      console.log("\n---");
-      console.log(`Source: ${doc.source}`);
-      console.log(`Chunk: ${doc.chunkIndex}`);
-      console.log(doc.content);
-    }
+    logger.debug("Preparing documents for LLM");
 
     // -----------------------------
     // 5. Set up SSE
@@ -174,14 +148,7 @@ app.post("/api/chat/stream", async (req, res) => {
 
     res.write(
       `event: sources\n` +
-        `data: ${JSON.stringify(
-          expandedDocuments.map((doc) => ({
-            file: doc.source,
-            chunk: doc.chunkIndex,
-            score: doc.score,
-            rerankerScore: doc.rerankerScore,
-          })),
-        )}\n\n`,
+        `data: ${JSON.stringify(formatSearchResultsForAPI(expandedDocuments))}\n\n`,
     );
 
     // -----------------------------
@@ -205,7 +172,7 @@ app.post("/api/chat/stream", async (req, res) => {
 
     res.end();
   } catch (e) {
-    console.error(e);
+    logger.error("Error in /api/chat/stream", { error: String(e) });
 
     // If headers haven't been sent, we can
     // still return a normal HTTP error.
@@ -238,21 +205,11 @@ app.post("/api/code/chat", async (req, res) => {
       });
     }
 
-    console.log("Received code question:", question);
+    logger.debug("Received code question", { question });
 
     const result = await answerCodeQuestion(question);
 
-    console.log("\nCode sources:");
-
-    for (const source of result.results) {
-      console.log({
-        file: source.filePath,
-        symbol: source.symbolName,
-        lines: `${source.startLine}-${source.endLine}`,
-        retrieval: source.retrieval,
-        rerankerScore: source.rerankerScore,
-      });
-    }
+    logger.debug(`Found ${result.results.length} code sources`);
 
     res.json({
       answer: result.answer,
@@ -267,7 +224,7 @@ app.post("/api/code/chat", async (req, res) => {
       })),
     });
   } catch (e) {
-    console.error(e);
+    logger.error("Error in /api/code/chat", { error: String(e) });
 
     res.status(500).json({
       error: "Internal Server Error",
@@ -286,10 +243,7 @@ app.post("/api/code/chat/stream", async (req, res) => {
       });
     }
 
-    console.log(
-      "Received streaming code question:",
-      question,
-    );
+    logger.debug("Received streaming code question", { question });
 
     // 1. Retrieve and rerank code
     const result =
@@ -314,18 +268,7 @@ app.post("/api/code/chat/stream", async (req, res) => {
     // 3. Send sources first
     res.write(
       `event: sources\n` +
-        `data: ${JSON.stringify(
-          result.results.map((source) => ({
-            file: source.filePath,
-            symbol: source.symbolName,
-            type: source.symbolType,
-            startLine: source.startLine,
-            endLine: source.endLine,
-            retrieval: source.retrieval,
-            rerankerScore:
-              source.rerankerScore,
-          })),
-        )}\n\n`,
+        `data: ${JSON.stringify(formatSearchResultsForAPI(result.results))}\n\n`,
     );
 
     // 4. Stream the LLM response
@@ -351,7 +294,7 @@ app.post("/api/code/chat/stream", async (req, res) => {
 
     res.end();
   } catch (e) {
-    console.error(e);
+    logger.error("Error in /api/code/chat/stream", { error: String(e) });
 
     if (!res.headersSent) {
       return res.status(500).json({
@@ -372,5 +315,5 @@ app.post("/api/code/chat/stream", async (req, res) => {
 });
 
 app.listen(port, () => {
-  console.log(`Server is running on http://localhost:${port}`);
+  logger.info(`Server is running on http://localhost:${port}`);
 });

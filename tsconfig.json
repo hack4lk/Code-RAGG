@@ -3,16 +3,20 @@
     "target": "ES2022",
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
-    "rootDir": "./src",
+    "rootDir": "./",
     "outDir": "./dist",
     "strict": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
     "allowImportingTsExtensions": true,
-    "rewriteRelativeImportExtensions": true
+    "rewriteRelativeImportExtensions": true,
+    "isolatedModules": true,
+    "types": ["jest", "node"]
   },
   "include": [
     "src",
+    "__tests__",
+    "scripts",
     "tests/test-bge.ts",
     "tests/test-chat.ts",
     "tests/test-embedding.ts",

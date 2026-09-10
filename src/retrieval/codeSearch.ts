@@ -1,64 +1,35 @@
 import "dotenv/config";
 
-import pool from "../core/db.js";
+import { codeRepository } from "../core/repository.js";
 import { createEmbedding } from "../core/embeddings.js";
+import { SearchResult } from "./types.js";
 
-export interface CodeSearchResult {
-  id: number;
-  filePath: string;
-  symbolName: string;
-  symbolType: string;
-  startLine: number;
-  endLine: number;
-  content: string;
-  metadata: {
-    calls: Array<{
-      name: string;
-      filePath: string;
-      symbolName: string;
-      line: number;
-    }>;
-    externalCalls: string[];
-    dependencies: string[];
-  };
-  similarity: number;
-}
+/**
+ * CodeSearchResult is an alias for SearchResult with source='code' discriminator
+ * For backward compatibility, this is exported as well
+ */
+export type CodeSearchResult = SearchResult & { source: 'code' };
 
 export async function searchCode(
   query: string,
   limit = 10,
-): Promise<CodeSearchResult[]> {
+): Promise<SearchResult[]> {
   const embedding = await createEmbedding(query);
 
-  const result = await pool.query(
-    `
-    SELECT
-      id,
-      file_path,
-      symbol_name,
-      symbol_type,
-      start_line,
-      end_line,
-      content,
-      metadata,
-      1 - (embedding <=> $1::vector) AS similarity
-    FROM code_chunks
-    WHERE embedding IS NOT NULL
-    ORDER BY embedding <=> $1::vector
-    LIMIT $2
-    `,
-    [JSON.stringify(embedding), limit],
-  );
+  const results = await codeRepository.searchByEmbedding(embedding, limit);
 
-  return result.rows.map((row) => ({
+  return results.map((row) => ({
     id: row.id,
-    filePath: row.file_path,
-    symbolName: row.symbol_name,
-    symbolType: row.symbol_type,
-    startLine: row.start_line,
-    endLine: row.end_line,
+    source: 'code' as const,
+    location: row.filePath,
+    filePath: row.filePath,
+    symbolName: row.symbolName,
+    symbolType: row.symbolType,
+    startLine: row.startLine,
+    endLine: row.endLine,
     content: row.content,
+    score: row.similarity,
     metadata: row.metadata,
-    similarity: Number(row.similarity),
+    retrieval: ['semantic'] as const,
   }));
 }

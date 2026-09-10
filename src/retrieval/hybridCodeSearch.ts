@@ -1,47 +1,14 @@
-import { searchCode, CodeSearchResult } from "./codeSearch.js";
-import { findCallers, findImportLocations } from "../graph/codeCallers.js";
+import { searchCode } from "./codeSearch.js";
+import { findCallers } from "../graph/codeCallers.js";
 import { findCallees } from "../graph/codeCallees.js";
 import { findSymbolByName } from "../graph/codeSymbols.js";
-import pool from "../core/db.js";
+import { config } from "../infrastructure/configSchema.js";
+import { SearchResult } from "./types.js";
+import { parseQueryIntent } from "./queryIntents.js";
+import { ARCHITECTURE_KEYWORDS } from "./constants.js";
 import 'dotenv/config';
 
-const SEMANTIC_SEARCH_LIMIT = process.env.SEMANTIC_SEARCH_LIMIT ? parseInt(process.env.SEMANTIC_SEARCH_LIMIT) : 5;
-
-// Stop words to filter from query
-const STOP_WORDS = new Set([
-  'the', 'a', 'an', 'and', 'or', 'but', 'with', 'as', 'by', 'at', 'on',
-  'in', 'of', 'for', 'to', 'from', 'about', 'this', 'that', 'is', 'are',
-  'be', 'been', 'being', 'have', 'has', 'had', 'do', 'does', 'did',
-]);
-
-// Relationship keywords that indicate query intent
-const CALLERS_KEYWORDS = new Set([
-  'calls', 'called', 'uses', 'used', 'who', 'where', 'callers', 'calling'
-]);
-
-const CALLEES_KEYWORDS = new Set([
-  'call', 'calls', 'called', 'does', 'do', 'callees', 'calls'
-]);
-
-// Architecture keywords that should boost relevant entity types
-const ARCHITECTURE_KEYWORDS = {
-  api: ["route", "interface", "type"],
-  endpoint: ["route"],
-  interface: ["interface", "type"],
-  contract: ["interface", "type"],
-  flow: ["function", "method", "route"],
-  architecture: ["class", "interface", "route"],
-  design: ["class", "interface"],
-  config: ["constant"],
-  configuration: ["constant"],
-  setup: ["constant"],
-  middleware: ["method", "function", "constant"],
-  handler: ["method", "function"],
-  ingest: ["function", "method", "class"],
-  ingestion: ["function", "method", "class"],
-  pipeline: ["function", "method", "class"],
-  process: ["function", "method", "class"],
-};
+const SEMANTIC_SEARCH_LIMIT = config.search.semanticLimit;
 
 function detectArchitectureKeywords(query: string): string[] {
   const normalized = query.toLowerCase();
@@ -62,7 +29,7 @@ function getBoostMultiplier(symbolType: string, architectureKeywords: string[]):
   
   // Boost architectural entities for relevant queries
   if (architectureKeywords.length > 0 && architectureKeywords.includes(symbolType)) {
-    boost = 1.5; // Boost matching entity types
+    boost = config.reranking.architectureKeywordBoost; // Boost matching entity types
   }
   
   // Special handling for query types
@@ -70,62 +37,13 @@ function getBoostMultiplier(symbolType: string, architectureKeywords: string[]):
   return boost;
 }
 
-export interface HybridCodeSearchResult extends Omit<
-  CodeSearchResult,
-  "similarity"
-> {
-  similarity: number | null;
+/**
+ * HybridCodeSearchResult is now simply SearchResult with source='code'
+ * The retrieval field indicates how the result was found
+ */
+export type HybridCodeSearchResult = SearchResult;
 
-  retrieval: ("semantic" | "target" | "caller" | "callee")[];
-}
 
-// Parse query to extract symbol name and relationship intent
-// Returns both the symbol and the type of relationship to search for
-async function parseQueryIntent(
-  query: string,
-): Promise<{ symbol: string | null; intent: "callers" | "callees" | "both" }> {
-  const normalized = query.toLowerCase();
-  
-  // Detect relationship intent
-  let intent: "callers" | "callees" | "both" = "both";
-  
-  const hasCallersKeywords = Array.from(CALLERS_KEYWORDS).some(kw => normalized.includes(kw));
-  const hasCalleesKeywords = Array.from(CALLEES_KEYWORDS).some(kw => normalized.includes(kw));
-  
-  // More specific detection for common patterns
-  if (normalized.includes("what calls") || normalized.includes("who calls")) {
-    intent = "callers";
-  } else if (normalized.includes("what does") && normalized.includes("call")) {
-    intent = "callees";
-  } else if (normalized.includes("who uses") || (normalized.includes("where is") && normalized.includes("used"))) {
-    intent = "callers";
-  } else if (hasCalleesKeywords && !hasCallersKeywords) {
-    intent = "callees";
-  } else if (hasCallersKeywords && !hasCalleesKeywords) {
-    intent = "callers";
-  }
-  
-  // Extract symbol: remove all stop words and relationship keywords
-  const allNoise = new Set([...STOP_WORDS, ...CALLERS_KEYWORDS, ...CALLEES_KEYWORDS, 'function', 'component', 'class', 'method', 'interface', 'type', 'what', 'how', 'when', 'why', 'can', 'could', 'should', 'would']);
-  const tokens = normalized
-    .split(/\s+/)
-    .filter(token => !allNoise.has(token) && token.length > 0);
-  
-  // Try to find exact match in DB, prioritizing longer tokens
-  const sortedTokens = tokens.sort((a, b) => b.length - a.length);
-  
-  for (const token of sortedTokens) {
-    const result = await pool.query(
-      `SELECT symbol_name FROM code_chunks WHERE LOWER(symbol_name) = $1 LIMIT 1`,
-      [token]
-    );
-    if (result.rows.length > 0) {
-      return { symbol: result.rows[0].symbol_name, intent };
-    }
-  }
-  
-  return { symbol: null, intent };
-}
 
 function addResult(
   results: Map<number, HybridCodeSearchResult>,
@@ -136,7 +54,8 @@ function addResult(
   if (results.has(row.id)) {
     const existing = results.get(row.id)!;
 
-    if (!existing.retrieval.includes(retrieval)) {
+    if (!existing.retrieval?.includes(retrieval)) {
+      if (!existing.retrieval) existing.retrieval = [];
       existing.retrieval.push(retrieval);
     }
 
@@ -145,6 +64,8 @@ function addResult(
 
   results.set(row.id, {
     id: row.id,
+    source: 'code' as const,
+    location: row.file_path,
     filePath: row.file_path,
     symbolName: row.symbol_name,
     symbolType: row.symbol_type,
@@ -152,9 +73,9 @@ function addResult(
     endLine: row.end_line,
     content: row.content,
     metadata: row.metadata,
-    similarity,
+    score: similarity ?? 0,
     retrieval: [retrieval],
-  });
+  } as HybridCodeSearchResult);
 }
 
 export async function hybridCodeSearch(
@@ -175,10 +96,10 @@ export async function hybridCodeSearch(
   const semanticResults = await searchCode(query, effectiveLimit);
 
   for (const result of semanticResults) {
-    const boost = getBoostMultiplier(result.symbolType, architectureKeywords);
-    results.set(result.id, {
+    const boost = getBoostMultiplier(result.symbolType ?? '', architectureKeywords);
+    results.set(result.id as number, {
       ...result,
-      similarity: result.similarity ? result.similarity * boost : null,
+      score: result.score ? result.score * boost : 0,
       retrieval: ["semantic"],
     });
   }
@@ -202,8 +123,8 @@ export async function hybridCodeSearch(
       // Add relationships
       if (direction === "callers" || direction === "both") {
         // For functions and methods, look for function calls
-        if (target.symbol_type === "function" || target.symbol_type === "method") {
-          const callers = await findCallers(target.symbol_name);
+        if (target.symbolType === "function" || target.symbolType === "method") {
+          const callers = await findCallers(target.symbolName);
           for (const caller of callers) {
             addResult(results, caller, "caller", null);
           }
@@ -225,7 +146,7 @@ export async function hybridCodeSearch(
       }
 
       if (direction === "callees" || direction === "both") {
-        const callees = await findCallees(target.symbol_name);
+        const callees = await findCallees(target.symbolName);
         for (const callee of callees) {
           addResult(results, callee, "callee", null);
         }
@@ -241,21 +162,19 @@ export async function hybridCodeSearch(
   // --------------------------------------------------
 
   if (relationshipIntent !== "both" && semanticResults.length > 0) {
-    const direction = relationshipIntent;
-
     for (const result of semanticResults) {
-      if (direction === "callers" || direction === "both") {
+      if (relationshipIntent === "callers") {
         // For functions and methods, look for function calls
         if (result.symbolType === "function" || result.symbolType === "method") {
-          const callers = await findCallers(result.symbolName);
+          const callers = await findCallers(result.symbolName ?? '');
           for (const caller of callers) {
             addResult(results, caller, "caller", null);
           }
         }
         // For constants, types, interfaces, and classes, look for imports
-        else if (result.metadata?.relationships?.imported_by) {
+        else if ((result.metadata as any)?.relationships?.imported_by) {
           // Add import locations as "caller" results
-          for (const importLocation of result.metadata.relationships.imported_by) {
+          for (const importLocation of (result.metadata as any).relationships.imported_by || []) {
             addResult(results, {
               ...result,
             }, "caller", null);
@@ -263,8 +182,8 @@ export async function hybridCodeSearch(
         }
       }
 
-      if (direction === "callees" || direction === "both") {
-        const callees = await findCallees(result.symbolName);
+      if (relationshipIntent === "callees") {
+        const callees = await findCallees(result.symbolName ?? '');
         for (const callee of callees) {
           addResult(results, callee, "callee", null);
         }
@@ -272,10 +191,10 @@ export async function hybridCodeSearch(
     }
   }
 
-  // Sort by similarity (semantic results ranked higher, relationships don't have similarity scores)
+  // Sort by score (semantic results ranked higher, relationships don't have similarity scores)
   return Array.from(results.values()).sort((a, b) => {
-    const aScore = a.similarity ?? 0;
-    const bScore = b.similarity ?? 0;
+    const aScore = a.score ?? 0;
+    const bScore = b.score ?? 0;
     return bScore - aScore;
   });
 }

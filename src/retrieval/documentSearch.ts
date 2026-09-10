@@ -1,52 +1,37 @@
 import { createEmbedding } from "../core/embeddings";
-import pool from "../core/db";
+import { documentRepository } from "../core/repository";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { config } from "../infrastructure/configSchema";
+import { SearchResult } from "./types";
+import { STOP_WORDS } from "./constants";
+import { logger } from "../infrastructure/logger";
 import "dotenv/config";
 
-export interface SearchResult {
-  id: number;
-  source: string;
-  chunkIndex: number;
-  content: string;
-  distance: number;
-  score: number;
-  rerankerScore?: number;
-  bgeScore?: number;
-}
+// Re-export SearchResult for backward compatibility
+export type { SearchResult };
 
 export async function expandContext(
   documents: SearchResult[],
   radius: number = 1,
 ): Promise<SearchResult[]> {
-  const expanded = new Map<number, SearchResult>();
+  const expanded = new Map<number | string, SearchResult>();
 
   for (const document of documents) {
-    const result = await pool.query(
-      `SELECT
-        dc.id,
-        d.filename AS source,
-        dc.chunk_index,
-        dc.content
-      FROM document_chunks dc
-      JOIN documents d ON dc.document_id = d.id
-      WHERE d.filename = $1
-        AND dc.chunk_index BETWEEN $2 AND $3
-      ORDER BY dc.chunk_index`,
-      [
-        document.source,
-        Math.max(0, document.chunkIndex - radius),
-        document.chunkIndex + radius,
-      ],
+    const result = await documentRepository.getExpandedContext(
+      document.location,
+      document.documentChunkIndex ?? 0,
+      radius,
     );
 
-    for (const row of result.rows) {
+    for (const row of result) {
       const original = documents.find((doc) => doc.id === row.id);
 
       expanded.set(row.id, {
         id: row.id,
-        source: row.source,
-        chunkIndex: row.chunk_index,
+        source: 'document',
+        location: row.filename,
+        documentChunkIndex: row.chunkIndex,
         content: row.content,
 
         // Preserve retrieval scores if this
@@ -54,16 +39,17 @@ export async function expandContext(
         distance: original?.distance ?? 0,
         score: original?.score ?? 0,
         rerankerScore: original?.rerankerScore,
+        retrieval: original?.retrieval ?? ['semantic'],
       });
     }
   }
 
   return Array.from(expanded.values()).sort((a, b) => {
-    if (a.source !== b.source) {
-      return a.source.localeCompare(b.source);
+    if (a.location !== b.location) {
+      return a.location.localeCompare(b.location);
     }
 
-    return a.chunkIndex - b.chunkIndex;
+    return (a.documentChunkIndex ?? 0) - (b.documentChunkIndex ?? 0);
   });
 }
 
@@ -71,10 +57,10 @@ export async function expandContext(
 export async function getFullDocumentsForAnswer(
   chunks: SearchResult[],
 ): Promise<{ filename: string; content: string }[]> {
-  const RERANK_THRESHOLD = parseFloat(process.env.RERANK_THRESHOLD || "0.05");
-  const MAX_CONTEXT_DOCS = parseInt(process.env.MAX_CONTEXT_DOCS || "3");
-  const MAX_DOCUMENT_SIZE = parseInt(process.env.MAX_DOCUMENT_SIZE || "10240");
-  const DOCUMENTS_DIR = process.env.DOCUMENTS_DIR;
+  const RERANK_THRESHOLD = config.reranking.documentThreshold;
+  const MAX_CONTEXT_DOCS = config.search.maxContextDocs;
+  const MAX_DOCUMENT_SIZE = config.search.maxDocumentSize;
+  const DOCUMENTS_DIR = config.filesystem.documentsDir;
 
   if (!DOCUMENTS_DIR) {
     throw new Error("DOCUMENTS_DIR environment variable is not set");
@@ -90,8 +76,8 @@ export async function getFullDocumentsForAnswer(
     }
 
     // Keep only the highest scoring chunk per file
-    if (!fileMap.has(chunk.source) || chunk.score > fileMap.get(chunk.source)!.score) {
-      fileMap.set(chunk.source, chunk);
+    if (!fileMap.has(chunk.location) || chunk.score > fileMap.get(chunk.location)!.score) {
+      fileMap.set(chunk.location, chunk);
     }
   }
 
@@ -105,7 +91,7 @@ export async function getFullDocumentsForAnswer(
 
   for (const chunk of topFiles) {
     try {
-      const filePath = path.join(DOCUMENTS_DIR, chunk.source);
+      const filePath = path.join(DOCUMENTS_DIR, chunk.location);
       let content = await fs.readFile(filePath, "utf-8");
 
       // Truncate to max size
@@ -114,11 +100,11 @@ export async function getFullDocumentsForAnswer(
       }
 
       results.push({
-        filename: chunk.source,
+        filename: chunk.location,
         content,
       });
     } catch (error) {
-      console.error(`Failed to read document ${chunk.source}:`, error);
+      logger.error(`Failed to read document ${chunk.location}`, { error: String(error) });
       // Continue with next file instead of failing
     }
   }
@@ -130,25 +116,19 @@ export async function searchDocuments(
   query: string,
   limit = 5,
 ): Promise<SearchResult[]> {
-  console.log("limiting search to", limit);
   const embedding = await createEmbedding(query);
 
-  const result = await pool.query(
-    `SELECT dc.id, d.filename AS source, dc.chunk_index, dc.content, dc.embedding <=> $1::vector AS distance
-        FROM document_chunks dc
-        JOIN documents d on dc.document_id = d.id
-        ORDER BY embedding <=> $1::vector
-        LIMIT $2`,
-    [JSON.stringify(embedding), limit],
-  );
+  const results = await documentRepository.searchByEmbedding(embedding, limit);
 
-  return result.rows.map((row) => ({
+  return results.map((row) => ({
     id: row.id,
-    source: row.source,
-    chunkIndex: row.chunk_index,
+    source: 'document' as const,
+    location: row.filename,
+    documentChunkIndex: row.chunkIndex,
     content: row.content,
     distance: row.distance,
     score: 1 - row.distance,
+    retrieval: ['semantic'] as const,
   }));
 }
 
@@ -157,13 +137,6 @@ export async function searchDocuments(
  * Filters for keywords that are likely to be specific and selective
  */
 export function extractKeywords(query: string): string[] {
-  const stopWords = new Set([
-    'a', 'an', 'and', 'are', 'as', 'at', 'be', 'but', 'by', 'for', 'from',
-    'has', 'have', 'he', 'her', 'his', 'how', 'i', 'in', 'is', 'it', 'its',
-    'of', 'on', 'or', 'that', 'the', 'this', 'to', 'used', 'was', 'what', 'which',
-    'who', 'will', 'with', 'you', 'your'
-  ]);
-
   const keywords = query
     .toLowerCase()
     .split(/\W+/)
@@ -172,7 +145,7 @@ export function extractKeywords(query: string): string[] {
       // 1. Not empty
       // 2. Not stop words
       // 3. More than 4 characters (to avoid generic words like 'this')
-      return word.length > 4 && !stopWords.has(word);
+      return word.length > 4 && !STOP_WORDS.has(word);
     });
 
   // Return unique keywords, sorted by length (longer = more specific)
@@ -190,38 +163,17 @@ export async function searchDocumentsByKeyword(
     return [];
   }
 
-  // Build WHERE clause with OR conditions for each keyword
-  const whereConditions = keywords
-    .map((_, i) => `dc.content ILIKE $${i + 1}`)
-    .join(' OR ');
+  const results = await documentRepository.searchByKeyword(keywords, limit);
 
-  // Build case statement to count keyword matches
-  const caseStatement = keywords
-    .map((_, i) => `CASE WHEN dc.content ILIKE $${i + 1} THEN 1 ELSE 0 END`)
-    .join(' + ');
-
-  const result = await pool.query(
-    `SELECT 
-      dc.id, 
-      d.filename AS source, 
-      dc.chunk_index, 
-      dc.content,
-      (${caseStatement}) AS keyword_match_count
-     FROM document_chunks dc
-     JOIN documents d ON dc.document_id = d.id
-     WHERE ${whereConditions}
-     ORDER BY keyword_match_count DESC, dc.id
-     LIMIT $${keywords.length + 1}`,
-    [...keywords.map(kw => `%${kw}%`), limit],
-  );
-
-  return result.rows.map((row) => ({
+  return results.map((row) => ({
     id: row.id,
-    source: row.source,
-    chunkIndex: row.chunk_index,
+    source: 'document' as const,
+    location: row.filename,
+    documentChunkIndex: row.chunkIndex,
     content: row.content,
     distance: 0,
-    score: Math.min(1, (row.keyword_match_count / keywords.length) * 0.8), // Cap at 0.8 for keyword matches
+    score: Math.min(1, (row.keywordMatchCount / keywords.length) * 0.8), // Cap at 0.8 for keyword matches
+    retrieval: ['keyword'] as const,
   }));
 }
 
@@ -235,35 +187,35 @@ export async function hybridDocumentSearch(
   query: string,
   semanticLimit = 10,
 ): Promise<SearchResult[]> {
-  console.log(`\n[Hybrid Search] Query: "${query}"`);
+  logger.debug(`Hybrid search starting`, { query });
   
   // Stage 1: Vector similarity search
   const semanticResults = await searchDocuments(query, semanticLimit);
-  console.log(`[Hybrid Search] Vector search returned ${semanticResults.length} results`);
+  logger.debug(`Vector search returned ${semanticResults.length} results`);
   if (semanticResults.length > 0) {
-    console.log(`[Hybrid Search] Top result score: ${semanticResults[0].score.toFixed(3)}`);
+    logger.debug(`Top result score: ${semanticResults[0].score.toFixed(3)}`);
   }
 
   // Stage 2: Extract keywords and run keyword search
   const keywords = extractKeywords(query);
-  console.log(`[Hybrid Search] Extracted keywords: ${keywords.join(', ')}`);
+  logger.debug(`Extracted keywords: ${keywords.join(', ')}`);
   
   if (keywords.length === 0) {
-    console.log(`[Hybrid Search] No keywords extracted, returning ${semanticResults.length} semantic results`);
+    logger.debug(`No keywords extracted, returning semantic results`);
     return semanticResults;
   }
 
   // Always run keyword search when we have keywords
   // Use higher limit to find more keyword matches (keyword search is broader)
   const keywordLimit = Math.max(semanticLimit * 3, 30);
-  console.log(`[Hybrid Search] Running keyword search with limit ${keywordLimit}...`);
+  logger.debug(`Running keyword search with limit ${keywordLimit}`);
   const keywordResults = await searchDocumentsByKeyword(keywords, keywordLimit);
-  console.log(`[Hybrid Search] Keyword search returned ${keywordResults.length} results`);
+  logger.debug(`Keyword search returned ${keywordResults.length} results`);
 
   // Merge results intelligently:
   // - Semantic results are more reliable (higher score)
   // - Keyword results fill gaps and catch missed content
-  const merged = new Map<number, SearchResult>();
+  const merged = new Map<string | number, SearchResult>();
   
   // Add semantic results first (higher priority)
   semanticResults.forEach(doc => merged.set(doc.id, doc));
@@ -279,6 +231,6 @@ export async function hybridDocumentSearch(
     .sort((a, b) => b.score - a.score)
     .slice(0, semanticLimit);
     
-  console.log(`[Hybrid Search] Final merged results: ${finalResults.length} chunks from ${new Set(finalResults.map(r => r.source)).size} documents`);
+  logger.debug(`Final merged results: ${finalResults.length} chunks from ${new Set(finalResults.map(r => r.location)).size} documents`);
   return finalResults;
 }

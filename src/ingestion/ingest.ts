@@ -4,9 +4,11 @@ import crypto from "node:crypto";
 
 import { chunkMarkdown } from "../parsing/chunker.js";
 import { createEmbedding } from "../core/embeddings";
-import pool from "../core/db";
+import { documentRepository } from "../core/repository";
+import { config } from "../infrastructure/configSchema.js";
+import { logger } from "../infrastructure/logger";
 
-const DOCUMENTS_DIR = process.env.DOCUMENTS_DIR;
+const DOCUMENTS_DIR = config.filesystem.documentsDir;
 
 function createHash(content: string): string {
   return crypto.createHash("sha256").update(content).digest("hex");
@@ -19,10 +21,10 @@ async function ingest() {
 
   const forceIngest = process.argv.includes("--force");
   if (forceIngest) {
-    console.log("Force ingestion enabled (--force flag detected)");
+    logger.info("Force ingestion enabled (--force flag)");
   }
 
-  console.log(`Using documents directory: ${DOCUMENTS_DIR}`);
+  logger.info(`Using documents directory: ${DOCUMENTS_DIR}`);
   const files = await fs.readdir(DOCUMENTS_DIR);
 
   for (const filename of files) {
@@ -30,7 +32,7 @@ async function ingest() {
       continue;
     }
 
-    console.log(`\nProcessing ${filename}`);
+    logger.debug(`Processing ${filename}`);
 
     const filePath = path.join(DOCUMENTS_DIR, filename);
 
@@ -39,109 +41,62 @@ async function ingest() {
     const contentHash = createHash(content);
 
     // Check whether we've already ingested this document
-    const existingDocument = await pool.query(
-      `
-      SELECT id, content_hash
-      FROM documents
-      WHERE filename = $1
-      `,
-      [filename],
-    );
+    const document = await documentRepository.findByFilename(filename);
 
-    if (existingDocument.rows.length > 0) {
-      const document = existingDocument.rows[0];
+    if (document) {
 
-      if (document.content_hash === contentHash && !forceIngest) {
-        console.log("Document unchanged. Skipping. (Use --force to re-ingest)");
+      if (document.contentHash === contentHash && !forceIngest) {
+        logger.debug("Document unchanged. Skipping.");
 
         continue;
       }
 
-      if (document.content_hash === contentHash && forceIngest) {
-        console.log("Document unchanged but re-ingesting (--force flag).");
+      if (document.contentHash === contentHash && forceIngest) {
+        logger.info("Document unchanged but re-ingesting (--force flag).");
       } else {
-        console.log("Document changed. Re-ingesting.");
+        logger.info("Document changed. Re-ingesting.");
       }
 
       // Remove the old chunks
-      await pool.query(
-        `
-        DELETE FROM document_chunks
-        WHERE document_id = $1
-        `,
-        [document.id],
-      );
+      await documentRepository.deleteDocumentChunks(document.id);
 
       // Update the document hash
-      await pool.query(
-        `
-        UPDATE documents
-        SET
-          content_hash = $1,
-          updated_at = NOW()
-        WHERE id = $2
-        `,
-        [contentHash, document.id],
-      );
+      await documentRepository.updateDocumentHash(document.id, contentHash);
     }
 
     let documentId: number;
 
-    if (existingDocument.rows.length === 0) {
-      const result = await pool.query(
-        `
-        INSERT INTO documents (
-          filename,
-          content_hash
-        )
-        VALUES ($1, $2)
-        RETURNING id
-        `,
-        [filename, contentHash],
-      );
+    if (!document) {
+      documentId = await documentRepository.insertDocument(filename, contentHash);
 
-      documentId = result.rows[0].id;
-
-      console.log(`Created document ${documentId}`);
+      logger.info(`Created document ${documentId}`);
     } else {
-      documentId = existingDocument.rows[0].id;
+      documentId = document.id;
     }
 
     const chunks = chunkMarkdown(content, 1000);
 
-    console.log(`Created ${chunks.length} chunks`);
+    logger.debug(`Created ${chunks.length} chunks`);
 
     for (const chunk of chunks) {
-      console.log(`Embedding chunk ${chunk.index}`);
+      logger.debug(`Embedding chunk ${chunk.index}`);
 
       const embedding = await createEmbedding(chunk.content);
 
-      await pool.query(
-        `
-        INSERT INTO document_chunks (
-          document_id,
-          source,
-          chunk_index,
-          content,
-          embedding
-        )
-        VALUES ($1, $2, $3, $4, $5)
-        `,
-        [
-          documentId,
-          filename,
-          chunk.index,
-          chunk.content,
-          JSON.stringify(embedding),
-        ],
-      );
+      await documentRepository.insertChunk({
+        documentId,
+        source: filename,
+        chunkIndex: chunk.index,
+        content: chunk.content,
+        embedding,
+      });
     }
   }
 
-  console.log("\nIngestion complete!");
+  logger.info("Ingestion complete");
 }
 
 ingest().catch((error) => {
-  console.error(error);
+  logger.error("Ingestion failed", { error: String(error) });
   process.exit(1);
 });
