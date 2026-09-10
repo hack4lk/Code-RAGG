@@ -5,6 +5,7 @@ import path from "node:path";
 import { config } from "../infrastructure/configSchema";
 import { SearchResult } from "./types";
 import { STOP_WORDS } from "./constants";
+import { logger } from "../infrastructure/logger";
 import "dotenv/config";
 
 // Re-export SearchResult for backward compatibility
@@ -103,7 +104,7 @@ export async function getFullDocumentsForAnswer(
         content,
       });
     } catch (error) {
-      console.error(`Failed to read document ${chunk.location}:`, error);
+      logger.error(`Failed to read document ${chunk.location}`, { error: String(error) });
       // Continue with next file instead of failing
     }
   }
@@ -115,7 +116,6 @@ export async function searchDocuments(
   query: string,
   limit = 5,
 ): Promise<SearchResult[]> {
-  console.log("limiting search to", limit);
   const embedding = await createEmbedding(query);
 
   const results = await documentRepository.searchByEmbedding(embedding, limit);
@@ -187,30 +187,30 @@ export async function hybridDocumentSearch(
   query: string,
   semanticLimit = 10,
 ): Promise<SearchResult[]> {
-  console.log(`\n[Hybrid Search] Query: "${query}"`);
+  logger.debug(`Hybrid search starting`, { query });
   
   // Stage 1: Vector similarity search
   const semanticResults = await searchDocuments(query, semanticLimit);
-  console.log(`[Hybrid Search] Vector search returned ${semanticResults.length} results`);
+  logger.debug(`Vector search returned ${semanticResults.length} results`);
   if (semanticResults.length > 0) {
-    console.log(`[Hybrid Search] Top result score: ${semanticResults[0].score.toFixed(3)}`);
+    logger.debug(`Top result score: ${semanticResults[0].score.toFixed(3)}`);
   }
 
   // Stage 2: Extract keywords and run keyword search
   const keywords = extractKeywords(query);
-  console.log(`[Hybrid Search] Extracted keywords: ${keywords.join(', ')}`);
+  logger.debug(`Extracted keywords: ${keywords.join(', ')}`);
   
   if (keywords.length === 0) {
-    console.log(`[Hybrid Search] No keywords extracted, returning ${semanticResults.length} semantic results`);
+    logger.debug(`No keywords extracted, returning semantic results`);
     return semanticResults;
   }
 
   // Always run keyword search when we have keywords
   // Use higher limit to find more keyword matches (keyword search is broader)
   const keywordLimit = Math.max(semanticLimit * 3, 30);
-  console.log(`[Hybrid Search] Running keyword search with limit ${keywordLimit}...`);
+  logger.debug(`Running keyword search with limit ${keywordLimit}`);
   const keywordResults = await searchDocumentsByKeyword(keywords, keywordLimit);
-  console.log(`[Hybrid Search] Keyword search returned ${keywordResults.length} results`);
+  logger.debug(`Keyword search returned ${keywordResults.length} results`);
 
   // Merge results intelligently:
   // - Semantic results are more reliable (higher score)
@@ -231,6 +231,6 @@ export async function hybridDocumentSearch(
     .sort((a, b) => b.score - a.score)
     .slice(0, semanticLimit);
     
-  console.log(`[Hybrid Search] Final merged results: ${finalResults.length} chunks from ${new Set(finalResults.map(r => r.location)).size} documents`);
+  logger.debug(`Final merged results: ${finalResults.length} chunks from ${new Set(finalResults.map(r => r.location)).size} documents`);
   return finalResults;
 }

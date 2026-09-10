@@ -1,5 +1,6 @@
 import { AutoTokenizer, AutoModelForCausalLM } from "@huggingface/transformers";
 import { SearchResult } from "./types";
+import { logger } from "../infrastructure/logger";
 
 const MODEL_ID = "onnx-community/Qwen3-Reranker-0.6B-ONNX";
 
@@ -19,7 +20,7 @@ async function loadReranker(): Promise<void> {
     return;
   }
 
-  console.log("Loading reranker model...");
+  logger.info("Loading reranker model");
 
   tokenizer = await AutoTokenizer.from_pretrained(MODEL_ID);
 
@@ -28,7 +29,7 @@ async function loadReranker(): Promise<void> {
     device: "cpu",
   });
 
-  console.log("Reranker model loaded.");
+  logger.info("Reranker model loaded");
 }
 
 function createRerankerPrompt(question: string, document: string): string {

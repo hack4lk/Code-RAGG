@@ -1,11 +1,12 @@
 import { CopilotClient } from "@github/copilot-sdk";
+import { logger } from "../infrastructure/logger";
 
 async function main() {
   const question = process.argv[2];
 
   if (!question) {
-    console.error("Error: Please provide a question as an argument");
-    console.error("Usage: npx ts-node src/copilot-token-test.ts <question>");
+    logger.error("Error: Please provide a question as an argument");
+    logger.error("Usage: npx ts-node src/copilot-token-test.ts <question>");
     process.exit(1);
   }
 
@@ -20,8 +21,8 @@ async function main() {
     workingDirectory: process.cwd(),
 
     onPermissionRequest: async (request) => {
-      console.log("\nPermission requested:");
-      console.log(request);
+      logger.report("\nPermission requested:");
+      logger.report(JSON.stringify(request, null, 2));
 
       return {
         kind: "approve-once",

@@ -1,4 +1,5 @@
 import "dotenv/config";
+import { logger } from "../infrastructure/logger";
 
 import { codeRepository } from "../core/repository.js";
 import { parseCodebase } from "../parsing/codebase.js";
@@ -6,21 +7,21 @@ import { createEmbedding } from "../core/embeddings.js";
 import { config } from "../infrastructure/configSchema.js";
 
 async function ingestCode() {
-  console.log("Starting code ingestion...\n");
+  logger.info("Starting code ingestion");
 
   const sourceDirectory = config.filesystem.codeSourceDirectory;
 
-  console.log(`Source directory: ${sourceDirectory}`);
+  logger.info(`Source directory: ${sourceDirectory}`);
 
   const chunks = parseCodebase(sourceDirectory);
 
-  console.log(`\nParsed ${chunks.length} code chunks.`);
+  logger.info(`Parsed ${chunks.length} code chunks`);
 
-  console.log("\nRemoving existing code chunks...");
+  logger.info("Removing existing code chunks");
 
   await codeRepository.deleteAll();
 
-  console.log("Existing code chunks removed.");
+  logger.info("Existing code chunks removed");
 
   // Helper function to detect if a function is a React component
   function isReactComponent(chunk: any): boolean {
@@ -81,7 +82,7 @@ async function ingestCode() {
   }
 
   for (const chunk of chunks) {
-    console.log(`Embedding and inserting ${chunk.filePath}:${chunk.symbolName} (${chunk.symbolType})`);
+    logger.debug(`Embedding: ${chunk.filePath}:${chunk.symbolName}`);
     
     const callCount = chunk.metadata.calls.length;
     const externalCallCount = chunk.metadata.externalCalls.length;
@@ -89,7 +90,7 @@ async function ingestCode() {
     const hasRelationships = chunk.metadata.relationships && Object.keys(chunk.metadata.relationships).length > 0;
     
     if (callCount > 0 || externalCallCount > 0 || depCount > 0) {
-      console.log(`  Metadata: ${callCount} internal calls, ${externalCallCount} external calls, ${depCount} dependencies`);
+      logger.debug(`  Metadata: ${callCount} internal, ${externalCallCount} external, ${depCount} dependencies`);
     }
     
     if (hasRelationships && chunk.metadata.relationships) {
@@ -100,12 +101,12 @@ async function ingestCode() {
         rel.type_deps?.length && `type_deps: ${rel.type_deps.map((t: any) => t.name).join(', ')}`,
       ].filter(Boolean);
       if (relDetails.length > 0) {
-        console.log(`  Relationships: ${relDetails.join('; ')}`);
+        logger.debug(`  Relationships: ${relDetails.join('; ')}`);
       }
     }
     
     if (chunk.metadata.architecturalRole) {
-      console.log(`  Architectural role: ${chunk.metadata.architecturalRole}`);
+      logger.debug(`  Architectural role: ${chunk.metadata.architecturalRole}`);
     }
 
     const embeddingText = getEmbeddingText(chunk);
@@ -123,13 +124,13 @@ async function ingestCode() {
     });
   }
 
-  console.log(`\nInserted ${chunks.length} code chunks.`);
+  logger.info(`Inserted ${chunks.length} code chunks`);
 
-  console.log("Code ingestion complete!");
+  logger.info("Code ingestion complete");
 }
 
 ingestCode().catch((error) => {
-  console.error("Code ingestion failed:", error);
+  logger.error("Code ingestion failed", { error: String(error) });
 
   process.exit(1);
 });

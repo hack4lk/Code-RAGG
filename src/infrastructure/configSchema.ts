@@ -12,6 +12,7 @@
  */
 
 import 'dotenv/config';
+import { logger } from './logger';
 
 // Helper function to safely parse environment variables
 function getEnvNumber(key: string, defaultValue: number): number {
@@ -172,12 +173,12 @@ export function validateConfig(): void {
   }
 
   if (errors.length > 0) {
-    console.error('Configuration validation failed:');
-    errors.forEach(err => console.error(`  - ${err}`));
+    logger.error('Configuration validation failed:');
+    errors.forEach(err => logger.error(`  - ${err}`));
     throw new Error('Invalid configuration');
   }
 
-  console.log('[Config] Validation passed');
+  logger.info('[Config] Validation passed');
 }
 
 /**
@@ -191,5 +192,5 @@ export function logConfig(): void {
       password: '***', // Hide password from logs
     },
   };
-  console.log('[Config]', JSON.stringify(safeConfig, null, 2));
+  logger.debug('[Config]', safeConfig);
 }

@@ -1,3 +1,5 @@
+import { logger } from '../infrastructure/logger';
+
 export interface TokenUsage {
   inputTokens: number;
   outputTokens: number;
@@ -32,12 +34,14 @@ export const getLMStudioTokenUsage = (data: TokenData): GeneratedAnswer => {
     model: data.model ?? "qwen/qwen3.5-9b",
   };
 
-  console.log("\n========== TOKEN USAGE ==========");
-  console.log(`Model:         ${usage.model}`);
-  console.log(`Input tokens:  ${usage.inputTokens}`);
-  console.log(`Output tokens: ${usage.outputTokens}`);
-  console.log(`Total tokens:  ${usage.totalTokens}`);
-  console.log("=================================\n");
+  logger.report(`
+========== TOKEN USAGE ==========
+Model:         ${usage.model}
+Input tokens:  ${usage.inputTokens}
+Output tokens: ${usage.outputTokens}
+Total tokens:  ${usage.totalTokens}
+=================================
+`);
 
   return {
     answer: data.choices[0].message.content,

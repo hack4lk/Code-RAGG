@@ -4,6 +4,7 @@ import * as ts from "typescript";
 import "dotenv/config";
 import { parseCodeFile, ParsedCodeChunk, buildSymbolRegistry } from "./languages/typescript/parser.js";
 import { config } from "../infrastructure/configSchema.js";
+import { logger } from "../infrastructure/logger";
 
 const IGNORE_DIRECTORIES = new Set(
   config.filesystem.codeSkipDirectories
@@ -88,7 +89,7 @@ export function parseCodebase(directory: string): ParsedCodeChunk[] {
   }>>();
 
   for (const file of files) {
-    console.log(`Parsing ${path.relative(directory, file)}`);
+    logger.debug(`Parsing ${path.relative(directory, file)}`);
 
     const fileChunks = parseCodeFile(file);
     chunks.push(...fileChunks);
@@ -180,7 +181,7 @@ export function parseCodebase(directory: string): ParsedCodeChunk[] {
   }
 
   // Second pass: enrich chunks with import information
-  console.log("\nEnriching chunks with import relationships...");
+  logger.debug("Enriching chunks with import relationships");
   const enrichedChunks = chunks.map((chunk) => {
     const relationships = chunk.metadata.relationships || {};
 
@@ -198,7 +199,7 @@ export function parseCodebase(directory: string): ParsedCodeChunk[] {
     };
   });
 
-  console.log("Chunk enrichment complete.");
+  logger.debug("Chunk enrichment complete");
 
   return enrichedChunks;
 }
