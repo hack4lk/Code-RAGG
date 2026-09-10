@@ -1,16 +1,11 @@
 import { hybridDocumentSearch, expandContext, SearchResult } from "../../retrieval/documentSearch.js";
 import { rerank } from "../../retrieval/reranker.js";
 import { generateAnswer } from "../../core/embeddings.js";
+import { config } from "../../infrastructure/configSchema.js";
 
-const RERANK_THRESHOLD = process.env.RERANK_THRESHOLD
-  ? parseFloat(process.env.RERANK_THRESHOLD)
-  : 0.02;  // Lowered from 0.05: keyword matches usually score lower than semantic matches
-const PG_SEARCH_LIMIT = process.env.PG_SEARCH_LIMIT
-  ? parseInt(process.env.PG_SEARCH_LIMIT)
-  : 10;
-const MAX_CONTEXT_DOCS = process.env.MAX_CONTEXT_DOCS
-  ? parseInt(process.env.MAX_CONTEXT_DOCS)
-  : 3;
+const RERANK_THRESHOLD = config.reranking.documentThreshold;
+const PG_SEARCH_LIMIT = config.search.pgLimit;
+const MAX_CONTEXT_DOCS = config.search.maxContextDocs;
 
 export interface DocumentQAResult {
   answer: string;
@@ -74,8 +69,8 @@ export async function answerDocumentQuestion(
   return {
     answer,
     sources: expandedDocuments.map((doc: SearchResult) => ({
-      file: doc.source,
-      chunkIndex: doc.chunkIndex,
+      file: doc.location,
+      chunkIndex: doc.documentChunkIndex ?? 0,
     })),
   };
 }

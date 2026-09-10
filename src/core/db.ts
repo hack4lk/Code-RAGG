@@ -1,21 +1,18 @@
 import pg from "pg";
 import "dotenv/config";
+import { config, logConfig } from "../infrastructure/configSchema.js";
 
 const { Pool } = pg;
 
 const pool = new Pool({
-    host: process.env.DB_HOST,
-    port: Number(process.env.DB_PORT),
-    database: process.env.DB_NAME,
-    user: process.env.DB_USER,
-    password: process.env.DB_PASSWORD,
+    host: config.database.host,
+    port: config.database.port,
+    database: config.database.database,
+    user: config.database.user,
+    password: config.database.password,
 });
 
-// Debug logging
-console.log("Database Connection Config:");
-console.log(`  Host: ${process.env.DB_HOST}`);
-console.log(`  Port: ${process.env.DB_PORT}`);
-console.log(`  Database: ${process.env.DB_NAME}`);
-console.log(`  User: ${process.env.DB_USER}`);
+// Log safe config (passwords hidden)
+logConfig();
 
 export default pool;

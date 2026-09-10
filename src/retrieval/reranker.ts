@@ -1,5 +1,5 @@
 import { AutoTokenizer, AutoModelForCausalLM } from "@huggingface/transformers";
-import { SearchResult } from "./documentSearch";
+import { SearchResult } from "./types";
 
 const MODEL_ID = "onnx-community/Qwen3-Reranker-0.6B-ONNX";
 

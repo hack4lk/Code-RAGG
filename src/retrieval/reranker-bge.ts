@@ -3,7 +3,7 @@ import {
   AutoModelForSequenceClassification,
 } from "@huggingface/transformers";
 
-import { SearchResult } from "./documentSearch.js";
+import { SearchResult } from "./types.js";
 
 const MODEL = "Xenova/bge-reranker-base";
 

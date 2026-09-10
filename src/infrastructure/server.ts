@@ -4,13 +4,17 @@ import { searchDocuments, expandContext } from "../retrieval/documentSearch";
 import { generateAnswer, streamAnswer, streamCodeAnswer } from "../core/embeddings";
 import { rerank } from "../retrieval/reranker";
 import { answerCodeQuestion } from "../features/codeQA/codeAnswer";
+import { config, validateConfig } from "./configSchema";
 import 'dotenv/config';
 
+// Validate configuration at startup (fail fast if env vars are missing or invalid)
+validateConfig();
+
 const app = express();
-const port = process.env.PORT || 3000;
-const RERANK_THRESHOLD = process.env.RERANK_THRESHOLD ? parseFloat(process.env.RERANK_THRESHOLD) : 0.05;
-const PG_SEARCH_LIMIT = process.env.PG_SEARCH_LIMIT ? parseInt(process.env.PG_SEARCH_LIMIT) : 10;
-const MAX_CONTEXT_DOCS = process.env.MAX_CONTEXT_DOCS ? parseInt(process.env.MAX_CONTEXT_DOCS) : 3;
+const port = config.server.port;
+const RERANK_THRESHOLD = config.reranking.documentThreshold;
+const PG_SEARCH_LIMIT = config.search.pgLimit;
+const MAX_CONTEXT_DOCS = config.search.maxContextDocs;
 
 app.use(express.json());
 app.use(express.static(path.join(process.cwd(), "public")));
@@ -48,8 +52,8 @@ app.post("/api/chat", async (req, res) => {
 
     for (const doc of rerankedDocuments) {
       console.log({
-        file: doc.source,
-        chunk: doc.chunkIndex,
+        file: doc.location,
+        chunk: doc.documentChunkIndex,
         vectorScore: doc.score,
         rerankerScore: doc.rerankerScore,
       });
@@ -66,8 +70,8 @@ app.post("/api/chat", async (req, res) => {
 
     for (const doc of expandedDocuments) {
       console.log("\n---");
-      console.log(`Source: ${doc.source}`);
-      console.log(`Chunk: ${doc.chunkIndex}`);
+      console.log(`Source: ${doc.location}`);
+      console.log(`Chunk: ${doc.documentChunkIndex}`);
       console.log(doc.content);
     }
 
@@ -77,8 +81,8 @@ app.post("/api/chat", async (req, res) => {
     res.json({
       answer,
       sources: expandedDocuments.map((doc) => ({
-        file: doc.source,
-        chunk: doc.chunkIndex,
+        file: doc.location,
+        chunk: doc.documentChunkIndex,
         score: doc.score,
         rerankerScore: doc.rerankerScore,
       })),
@@ -128,8 +132,8 @@ app.post("/api/chat/stream", async (req, res) => {
 
     for (const doc of rerankedDocuments) {
       console.log({
-        file: doc.source,
-        chunk: doc.chunkIndex,
+        file: doc.location,
+        chunk: doc.documentChunkIndex,
         vectorScore: doc.score,
         rerankerScore: doc.rerankerScore,
       });
@@ -153,8 +157,8 @@ app.post("/api/chat/stream", async (req, res) => {
 
     for (const doc of expandedDocuments) {
       console.log("\n---");
-      console.log(`Source: ${doc.source}`);
-      console.log(`Chunk: ${doc.chunkIndex}`);
+      console.log(`Source: ${doc.location}`);
+      console.log(`Chunk: ${doc.documentChunkIndex}`);
       console.log(doc.content);
     }
 
@@ -176,8 +180,8 @@ app.post("/api/chat/stream", async (req, res) => {
       `event: sources\n` +
         `data: ${JSON.stringify(
           expandedDocuments.map((doc) => ({
-            file: doc.source,
-            chunk: doc.chunkIndex,
+            file: doc.location,
+            chunk: doc.documentChunkIndex,
             score: doc.score,
             rerankerScore: doc.rerankerScore,
           })),

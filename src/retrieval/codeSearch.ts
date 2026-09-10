@@ -2,32 +2,18 @@ import "dotenv/config";
 
 import pool from "../core/db.js";
 import { createEmbedding } from "../core/embeddings.js";
+import { SearchResult } from "./types.js";
 
-export interface CodeSearchResult {
-  id: number;
-  filePath: string;
-  symbolName: string;
-  symbolType: string;
-  startLine: number;
-  endLine: number;
-  content: string;
-  metadata: {
-    calls: Array<{
-      name: string;
-      filePath: string;
-      symbolName: string;
-      line: number;
-    }>;
-    externalCalls: string[];
-    dependencies: string[];
-  };
-  similarity: number;
-}
+/**
+ * CodeSearchResult is an alias for SearchResult with source='code' discriminator
+ * For backward compatibility, this is exported as well
+ */
+export type CodeSearchResult = SearchResult & { source: 'code' };
 
 export async function searchCode(
   query: string,
   limit = 10,
-): Promise<CodeSearchResult[]> {
+): Promise<SearchResult[]> {
   const embedding = await createEmbedding(query);
 
   const result = await pool.query(
@@ -52,13 +38,16 @@ export async function searchCode(
 
   return result.rows.map((row) => ({
     id: row.id,
+    source: 'code' as const,
+    location: row.file_path,
     filePath: row.file_path,
     symbolName: row.symbol_name,
     symbolType: row.symbol_type,
     startLine: row.start_line,
     endLine: row.end_line,
     content: row.content,
+    score: Number(row.similarity),
     metadata: row.metadata,
-    similarity: Number(row.similarity),
+    retrieval: ['semantic'] as const,
   }));
 }

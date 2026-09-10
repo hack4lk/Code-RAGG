@@ -7,9 +7,10 @@ import {
   streamChatCompletion,
   ChatMessage,
 } from "./llm.js";
+import { config } from "../infrastructure/configSchema.js";
 
-const LM_STUDIO_URL = process.env.LM_STUDIO_URL ?? "http://localhost:1234/v1";
-const EMBEDDING_MODEL = process.env.EMBEDDING_MODEL;
+const LM_STUDIO_URL = config.models.lmStudio.url;
+const EMBEDDING_MODEL = config.models.lmStudio.embeddingModel;
 
 export async function createEmbedding(text: string): Promise<number[]> {
   const resp = await fetch(`${LM_STUDIO_URL}/embeddings`, {

@@ -1,8 +1,9 @@
 import { hybridCodeSearch } from "./hybridCodeSearch.js";
 import { rerankCode, CodeRerankerResult } from "./codeReranker.js";
+import { config } from "../infrastructure/configSchema.js";
 import 'dotenv/config';
 
-const SEMANTIC_SEARCH_LIMIT = process.env.SEMANTIC_SEARCH_LIMIT ? parseInt(process.env.SEMANTIC_SEARCH_LIMIT) : 5;
+const SEMANTIC_SEARCH_LIMIT = config.search.semanticLimit;
 
 function isRelationshipQuestion(query: string): boolean {
   const normalized = query.toLowerCase();

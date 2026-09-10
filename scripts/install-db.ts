@@ -8,15 +8,19 @@
 
 import pg from "pg";
 import "dotenv/config";
+import { config, validateConfig } from "../src/infrastructure/configSchema.js";
+
+// Validate configuration at startup (fail fast if env vars are missing)
+validateConfig();
 
 const { Pool } = pg;
 
 const pool = new Pool({
-  host: process.env.DB_HOST,
-  port: Number(process.env.DB_PORT),
-  database: process.env.DB_NAME,
-  user: process.env.DB_USER,
-  password: process.env.DB_PASSWORD,
+  host: config.database.host,
+  port: config.database.port,
+  database: config.database.database,
+  user: config.database.user,
+  password: config.database.password,
 });
 
 async function installDatabase() {

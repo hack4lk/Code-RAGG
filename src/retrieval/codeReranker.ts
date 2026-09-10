@@ -1,24 +1,21 @@
-import { HybridCodeSearchResult } from "./hybridCodeSearch.js";
+import { SearchResult } from "./types.js";
 import "dotenv/config";
 import { scoreDocument } from "./reranker.js";
+import { config } from "../infrastructure/configSchema.js";
 
-const CODE_RERANK_THRESHOLD = process.env.CODE_RERANK_THRESHOLD
-  ? parseFloat(process.env.CODE_RERANK_THRESHOLD)
-  : 0.05;
+const CODE_RERANK_THRESHOLD = config.reranking.codeThreshold;
 
-const CODE_SIMILARITY_SCORE = process.env.CODE_SIMILARITY_SCORE
-  ? parseFloat(process.env.CODE_SIMILARITY_SCORE)
-  : 0.05;
+const CODE_SIMILARITY_SCORE = config.reranking.codeSimilarityScore;
 
-const DISABLE_RERANKER = process.env.DISABLE_RERANKER === "true";
+const DISABLE_RERANKER = config.reranking.disabled;
 
-export interface CodeRerankerResult extends HybridCodeSearchResult {
+export interface CodeRerankerResult extends SearchResult {
   rerankerScore: number;
 }
 
 export async function rerankCode(
   question: string,
-  documents: HybridCodeSearchResult[],
+  documents: SearchResult[],
   preserveRelationships = false,
 ): Promise<CodeRerankerResult[]> {
   const results: CodeRerankerResult[] = [];
@@ -28,7 +25,7 @@ export async function rerankCode(
     
     if (DISABLE_RERANKER) {
       // Skip LLM reranking and use semantic similarity as score
-      score = document.similarity ?? 0;
+      score = document.score ?? 0;
     } else {
       // Use cross-encoder reranker
       score = await scoreDocument(question, document.content);
@@ -37,7 +34,7 @@ export async function rerankCode(
     results.push({
       ...document,
       rerankerScore: score,
-    });
+    } as CodeRerankerResult);
   }
 
   return results
@@ -47,14 +44,14 @@ export async function rerankCode(
       // their source code scores poorly on its own.
       if (
         preserveRelationships &&
-        (result.retrieval.includes("caller") ||
-          result.retrieval.includes("callee"))
+        (result.retrieval?.includes("caller") ||
+          result.retrieval?.includes("callee"))
       ) {
         return true;
       }
 
       // Filter: Keep relationship results or results with good semantic OR good reranker score
-      const hasGoodSemantic = result.similarity && result.similarity >= CODE_SIMILARITY_SCORE;
+      const hasGoodSemantic = result.score && result.score >= CODE_SIMILARITY_SCORE;
       const hasGoodReranker = result.rerankerScore >= CODE_RERANK_THRESHOLD;
       return hasGoodSemantic || hasGoodReranker; // Either signal is sufficient
     })
