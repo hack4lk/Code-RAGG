@@ -151,3 +151,134 @@ export async function searchDocuments(
     score: 1 - row.distance,
   }));
 }
+
+/**
+ * Extract keywords from query by removing stop words and keeping meaningful terms
+ * Filters for keywords that are likely to be specific and selective
+ */
+export function extractKeywords(query: string): string[] {
+  const stopWords = new Set([
+    'a', 'an', 'and', 'are', 'as', 'at', 'be', 'but', 'by', 'for', 'from',
+    'has', 'have', 'he', 'her', 'his', 'how', 'i', 'in', 'is', 'it', 'its',
+    'of', 'on', 'or', 'that', 'the', 'this', 'to', 'used', 'was', 'what', 'which',
+    'who', 'will', 'with', 'you', 'your'
+  ]);
+
+  const keywords = query
+    .toLowerCase()
+    .split(/\W+/)
+    .filter(word => {
+      // Keep words that are:
+      // 1. Not empty
+      // 2. Not stop words
+      // 3. More than 4 characters (to avoid generic words like 'this')
+      return word.length > 4 && !stopWords.has(word);
+    });
+
+  // Return unique keywords, sorted by length (longer = more specific)
+  return Array.from(new Set(keywords)).sort((a, b) => b.length - a.length);
+}
+
+/**
+ * Keyword search fallback when vector search doesn't find relevant results
+ */
+export async function searchDocumentsByKeyword(
+  keywords: string[],
+  limit = 10,
+): Promise<SearchResult[]> {
+  if (keywords.length === 0) {
+    return [];
+  }
+
+  // Build WHERE clause with OR conditions for each keyword
+  const whereConditions = keywords
+    .map((_, i) => `dc.content ILIKE $${i + 1}`)
+    .join(' OR ');
+
+  // Build case statement to count keyword matches
+  const caseStatement = keywords
+    .map((_, i) => `CASE WHEN dc.content ILIKE $${i + 1} THEN 1 ELSE 0 END`)
+    .join(' + ');
+
+  const result = await pool.query(
+    `SELECT 
+      dc.id, 
+      d.filename AS source, 
+      dc.chunk_index, 
+      dc.content,
+      (${caseStatement}) AS keyword_match_count
+     FROM document_chunks dc
+     JOIN documents d ON dc.document_id = d.id
+     WHERE ${whereConditions}
+     ORDER BY keyword_match_count DESC, dc.id
+     LIMIT $${keywords.length + 1}`,
+    [...keywords.map(kw => `%${kw}%`), limit],
+  );
+
+  return result.rows.map((row) => ({
+    id: row.id,
+    source: row.source,
+    chunkIndex: row.chunk_index,
+    content: row.content,
+    distance: 0,
+    score: Math.min(1, (row.keyword_match_count / keywords.length) * 0.8), // Cap at 0.8 for keyword matches
+  }));
+}
+
+/**
+ * Hybrid document search: combines vector similarity with keyword fallback
+ * 1. Try semantic search first (always)
+ * 2. Run keyword search for extracted keywords (always, if keywords found)
+ * 3. Merge results intelligently, prioritizing semantic matches
+ */
+export async function hybridDocumentSearch(
+  query: string,
+  semanticLimit = 10,
+): Promise<SearchResult[]> {
+  console.log(`\n[Hybrid Search] Query: "${query}"`);
+  
+  // Stage 1: Vector similarity search
+  const semanticResults = await searchDocuments(query, semanticLimit);
+  console.log(`[Hybrid Search] Vector search returned ${semanticResults.length} results`);
+  if (semanticResults.length > 0) {
+    console.log(`[Hybrid Search] Top result score: ${semanticResults[0].score.toFixed(3)}`);
+  }
+
+  // Stage 2: Extract keywords and run keyword search
+  const keywords = extractKeywords(query);
+  console.log(`[Hybrid Search] Extracted keywords: ${keywords.join(', ')}`);
+  
+  if (keywords.length === 0) {
+    console.log(`[Hybrid Search] No keywords extracted, returning ${semanticResults.length} semantic results`);
+    return semanticResults;
+  }
+
+  // Always run keyword search when we have keywords
+  // Use higher limit to find more keyword matches (keyword search is broader)
+  const keywordLimit = Math.max(semanticLimit * 3, 30);
+  console.log(`[Hybrid Search] Running keyword search with limit ${keywordLimit}...`);
+  const keywordResults = await searchDocumentsByKeyword(keywords, keywordLimit);
+  console.log(`[Hybrid Search] Keyword search returned ${keywordResults.length} results`);
+
+  // Merge results intelligently:
+  // - Semantic results are more reliable (higher score)
+  // - Keyword results fill gaps and catch missed content
+  const merged = new Map<number, SearchResult>();
+  
+  // Add semantic results first (higher priority)
+  semanticResults.forEach(doc => merged.set(doc.id, doc));
+  
+  // Add keyword results that aren't already found by semantic search
+  keywordResults.forEach(doc => {
+    if (!merged.has(doc.id)) {
+      merged.set(doc.id, doc);
+    }
+  });
+
+  const finalResults = Array.from(merged.values())
+    .sort((a, b) => b.score - a.score)
+    .slice(0, semanticLimit);
+    
+  console.log(`[Hybrid Search] Final merged results: ${finalResults.length} chunks from ${new Set(finalResults.map(r => r.source)).size} documents`);
+  return finalResults;
+}
