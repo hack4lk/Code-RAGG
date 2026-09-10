@@ -75,6 +75,12 @@ export const config = {
     // Minimum semantic similarity score for code relationships
     codeSimilarityScore: getEnvNumber('CODE_SIMILARITY_SCORE', 0.05),
     
+    // Boost multiplier for matching architecture keywords in hybrid search
+    architectureKeywordBoost: getEnvNumber('CODE_ARCHITECTURE_BOOST', 1.5),
+    
+    // Boost multiplier for caller relationships
+    callerRelationshipBoost: getEnvNumber('CODE_CALLER_BOOST', 1.5),
+    
     // Disable reranking entirely (for debugging)
     disabled: getEnvBoolean('DISABLE_RERANKER', false),
   },
@@ -83,6 +89,15 @@ export const config = {
   filesystem: {
     // Directory containing markdown documents
     documentsDir: getEnvString('DOCUMENTS_DIR', './documents'),
+    
+    // Directory containing source code to ingest
+    codeSourceDirectory: getEnvString('CODE_SOURCE_DIRECTORY', './src'),
+    
+    // Directories to skip during code parsing (comma-separated)
+    codeSkipDirectories: getEnvString('CODE_SKIP_DIRECTORIES', 'node_modules,dist,build,.git,.next,__pycache__'),
+    
+    // File extensions to parse (comma-separated)
+    codeExtensions: getEnvString('CODE_EXTENSIONS', 'ts,tsx,js,jsx'),
   },
 
   // Model provider and configuration
@@ -140,6 +155,7 @@ export function validateConfig(): void {
 
   // Check filesystem settings
   if (!config.filesystem.documentsDir) errors.push('DOCUMENTS_DIR is required');
+  if (!config.filesystem.codeSourceDirectory) errors.push('CODE_SOURCE_DIRECTORY is required');
 
   // Check model configuration
   if (!config.models.provider) errors.push('MODEL_PROVIDER is required');

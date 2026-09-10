@@ -1,9 +1,10 @@
 import { createEmbedding } from "../core/embeddings";
-import pool from "../core/db";
+import { documentRepository } from "../core/repository";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { config } from "../infrastructure/configSchema";
 import { SearchResult } from "./types";
+import { STOP_WORDS } from "./constants";
 import "dotenv/config";
 
 // Re-export SearchResult for backward compatibility
@@ -16,32 +17,20 @@ export async function expandContext(
   const expanded = new Map<number | string, SearchResult>();
 
   for (const document of documents) {
-    const result = await pool.query(
-      `SELECT
-        dc.id,
-        d.filename,
-        dc.chunk_index,
-        dc.content
-      FROM document_chunks dc
-      JOIN documents d ON dc.document_id = d.id
-      WHERE d.filename = $1
-        AND dc.chunk_index BETWEEN $2 AND $3
-      ORDER BY dc.chunk_index`,
-      [
-        document.location,
-        Math.max(0, (document.documentChunkIndex ?? 0) - radius),
-        (document.documentChunkIndex ?? 0) + radius,
-      ],
+    const result = await documentRepository.getExpandedContext(
+      document.location,
+      document.documentChunkIndex ?? 0,
+      radius,
     );
 
-    for (const row of result.rows) {
+    for (const row of result) {
       const original = documents.find((doc) => doc.id === row.id);
 
       expanded.set(row.id, {
         id: row.id,
         source: 'document',
         location: row.filename,
-        documentChunkIndex: row.chunk_index,
+        documentChunkIndex: row.chunkIndex,
         content: row.content,
 
         // Preserve retrieval scores if this
@@ -129,20 +118,13 @@ export async function searchDocuments(
   console.log("limiting search to", limit);
   const embedding = await createEmbedding(query);
 
-  const result = await pool.query(
-    `SELECT dc.id, d.filename, dc.chunk_index, dc.content, dc.embedding <=> $1::vector AS distance
-        FROM document_chunks dc
-        JOIN documents d on dc.document_id = d.id
-        ORDER BY embedding <=> $1::vector
-        LIMIT $2`,
-    [JSON.stringify(embedding), limit],
-  );
+  const results = await documentRepository.searchByEmbedding(embedding, limit);
 
-  return result.rows.map((row) => ({
+  return results.map((row) => ({
     id: row.id,
     source: 'document' as const,
     location: row.filename,
-    documentChunkIndex: row.chunk_index,
+    documentChunkIndex: row.chunkIndex,
     content: row.content,
     distance: row.distance,
     score: 1 - row.distance,
@@ -155,13 +137,6 @@ export async function searchDocuments(
  * Filters for keywords that are likely to be specific and selective
  */
 export function extractKeywords(query: string): string[] {
-  const stopWords = new Set([
-    'a', 'an', 'and', 'are', 'as', 'at', 'be', 'but', 'by', 'for', 'from',
-    'has', 'have', 'he', 'her', 'his', 'how', 'i', 'in', 'is', 'it', 'its',
-    'of', 'on', 'or', 'that', 'the', 'this', 'to', 'used', 'was', 'what', 'which',
-    'who', 'will', 'with', 'you', 'your'
-  ]);
-
   const keywords = query
     .toLowerCase()
     .split(/\W+/)
@@ -170,7 +145,7 @@ export function extractKeywords(query: string): string[] {
       // 1. Not empty
       // 2. Not stop words
       // 3. More than 4 characters (to avoid generic words like 'this')
-      return word.length > 4 && !stopWords.has(word);
+      return word.length > 4 && !STOP_WORDS.has(word);
     });
 
   // Return unique keywords, sorted by length (longer = more specific)
@@ -188,39 +163,16 @@ export async function searchDocumentsByKeyword(
     return [];
   }
 
-  // Build WHERE clause with OR conditions for each keyword
-  const whereConditions = keywords
-    .map((_, i) => `dc.content ILIKE $${i + 1}`)
-    .join(' OR ');
+  const results = await documentRepository.searchByKeyword(keywords, limit);
 
-  // Build case statement to count keyword matches
-  const caseStatement = keywords
-    .map((_, i) => `CASE WHEN dc.content ILIKE $${i + 1} THEN 1 ELSE 0 END`)
-    .join(' + ');
-
-  const result = await pool.query(
-    `SELECT 
-      dc.id, 
-      d.filename,
-      dc.chunk_index, 
-      dc.content,
-      (${caseStatement}) AS keyword_match_count
-     FROM document_chunks dc
-     JOIN documents d ON dc.document_id = d.id
-     WHERE ${whereConditions}
-     ORDER BY keyword_match_count DESC, dc.id
-     LIMIT $${keywords.length + 1}`,
-    [...keywords.map(kw => `%${kw}%`), limit],
-  );
-
-  return result.rows.map((row) => ({
+  return results.map((row) => ({
     id: row.id,
     source: 'document' as const,
     location: row.filename,
-    documentChunkIndex: row.chunk_index,
+    documentChunkIndex: row.chunkIndex,
     content: row.content,
     distance: 0,
-    score: Math.min(1, (row.keyword_match_count / keywords.length) * 0.8), // Cap at 0.8 for keyword matches
+    score: Math.min(1, (row.keywordMatchCount / keywords.length) * 0.8), // Cap at 0.8 for keyword matches
     retrieval: ['keyword'] as const,
   }));
 }

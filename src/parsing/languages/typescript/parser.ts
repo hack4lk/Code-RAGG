@@ -1,6 +1,7 @@
 import * as ts from "typescript";
 import path from "node:path";
 import "dotenv/config";
+import { config } from "../../../infrastructure/configSchema.js";
 
 export interface CodeRelationship {
   name: string;
@@ -73,14 +74,14 @@ export interface ParsedCodeChunk {
 
 // Parse environment configuration
 const IGNORE_DIRECTORIES = new Set(
-  (process.env.CODE_SKIP_DIRECTORIES ?? "")
+  config.filesystem.codeSkipDirectories
     .split(",")
     .map((directory) => directory.trim())
     .filter(Boolean),
 );
 
 const CODE_EXTENSIONS = new Set(
-  (process.env.CODE_EXTENSIONS ?? "ts,tsx,js,jsx")
+  config.filesystem.codeExtensions
     .split(",")
     .map((extension) => {
       const trimmed = extension.trim();

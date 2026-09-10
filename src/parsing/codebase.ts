@@ -3,9 +3,10 @@ import path from "node:path";
 import * as ts from "typescript";
 import "dotenv/config";
 import { parseCodeFile, ParsedCodeChunk, buildSymbolRegistry } from "./languages/typescript/parser.js";
+import { config } from "../infrastructure/configSchema.js";
 
 const IGNORE_DIRECTORIES = new Set(
-  (process.env.CODE_SKIP_DIRECTORIES ?? "")
+  config.filesystem.codeSkipDirectories
     .split(",")
     .map((directory) => directory.trim())
     .filter(Boolean),
@@ -16,7 +17,7 @@ if (IGNORE_DIRECTORIES.has("")) {
 }
 
 const CODE_EXTENSIONS = new Set(
-  (process.env.CODE_EXTENSIONS ?? "")
+  config.filesystem.codeExtensions
     .split(",")
     .map((extension) => {
       const trimmed = extension.trim();

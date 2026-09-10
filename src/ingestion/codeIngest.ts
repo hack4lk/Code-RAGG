@@ -1,17 +1,14 @@
 import "dotenv/config";
 
-import pool from "../core/db.js";
+import { codeRepository } from "../core/repository.js";
 import { parseCodebase } from "../parsing/codebase.js";
 import { createEmbedding } from "../core/embeddings.js";
+import { config } from "../infrastructure/configSchema.js";
 
 async function ingestCode() {
   console.log("Starting code ingestion...\n");
 
-  const sourceDirectory = process.env.CODE_SOURCE_DIRECTORY;
-
-  if (!sourceDirectory) {
-    throw new Error("CODE_SOURCE_DIRECTORY environment variable is not set.");
-  }
+  const sourceDirectory = config.filesystem.codeSourceDirectory;
 
   console.log(`Source directory: ${sourceDirectory}`);
 
@@ -21,7 +18,7 @@ async function ingestCode() {
 
   console.log("\nRemoving existing code chunks...");
 
-  await pool.query("DELETE FROM code_chunks");
+  await codeRepository.deleteAll();
 
   console.log("Existing code chunks removed.");
 
@@ -114,36 +111,19 @@ async function ingestCode() {
     const embeddingText = getEmbeddingText(chunk);
     const embedding = await createEmbedding(embeddingText);
 
-    await pool.query(
-      `
-      INSERT INTO code_chunks (
-        file_path,
-        symbol_name,
-        symbol_type,
-        start_line,
-        end_line,
-        content,
-        metadata,
-        embedding
-      )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-      `,
-      [
-        chunk.filePath,
-        chunk.symbolName,
-        chunk.symbolType,
-        chunk.startLine,
-        chunk.endLine,
-        chunk.content,
-        JSON.stringify(chunk.metadata),
-        JSON.stringify(embedding),
-      ],
-    );
+    await codeRepository.insertChunk({
+      filePath: chunk.filePath,
+      symbolName: chunk.symbolName,
+      symbolType: chunk.symbolType,
+      startLine: chunk.startLine,
+      endLine: chunk.endLine,
+      content: chunk.content,
+      embedding,
+      metadata: chunk.metadata,
+    });
   }
 
   console.log(`\nInserted ${chunks.length} code chunks.`);
-
-  await pool.end();
 
   console.log("Code ingestion complete!");
 }

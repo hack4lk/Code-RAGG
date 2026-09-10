@@ -5,6 +5,7 @@ import { generateAnswer, streamAnswer, streamCodeAnswer } from "../core/embeddin
 import { rerank } from "../retrieval/reranker";
 import { answerCodeQuestion } from "../features/codeQA/codeAnswer";
 import { config, validateConfig } from "./configSchema";
+import { formatSearchResultsForAPI, formatSearchResultForLogging } from "./responseFormatting";
 import 'dotenv/config';
 
 // Validate configuration at startup (fail fast if env vars are missing or invalid)
@@ -51,12 +52,7 @@ app.post("/api/chat", async (req, res) => {
     console.log("\nReranked documents:");
 
     for (const doc of rerankedDocuments) {
-      console.log({
-        file: doc.location,
-        chunk: doc.documentChunkIndex,
-        vectorScore: doc.score,
-        rerankerScore: doc.rerankerScore,
-      });
+      console.log(formatSearchResultForLogging(doc));
     }
 
     // 3. Only send the best documents to the LLM
@@ -178,14 +174,7 @@ app.post("/api/chat/stream", async (req, res) => {
 
     res.write(
       `event: sources\n` +
-        `data: ${JSON.stringify(
-          expandedDocuments.map((doc) => ({
-            file: doc.location,
-            chunk: doc.documentChunkIndex,
-            score: doc.score,
-            rerankerScore: doc.rerankerScore,
-          })),
-        )}\n\n`,
+        `data: ${JSON.stringify(formatSearchResultsForAPI(expandedDocuments))}\n\n`,
     );
 
     // -----------------------------
@@ -318,18 +307,7 @@ app.post("/api/code/chat/stream", async (req, res) => {
     // 3. Send sources first
     res.write(
       `event: sources\n` +
-        `data: ${JSON.stringify(
-          result.results.map((source) => ({
-            file: source.filePath,
-            symbol: source.symbolName,
-            type: source.symbolType,
-            startLine: source.startLine,
-            endLine: source.endLine,
-            retrieval: source.retrieval,
-            rerankerScore:
-              source.rerankerScore,
-          })),
-        )}\n\n`,
+        `data: ${JSON.stringify(formatSearchResultsForAPI(result.results))}\n\n`,
     );
 
     // 4. Stream the LLM response
