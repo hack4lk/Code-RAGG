@@ -341,7 +341,7 @@ Refer to [API Documentation](./documents/api.md) for detailed endpoint specifica
 
 ### Web Interface
 
-![Web Interface](./screenshots/assistant.png)
+![Web Interface](./screenshots/code_assistant.gif)
 
 Access the **Code-RAGG Assistant** web interface:
 

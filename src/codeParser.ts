@@ -15,6 +15,31 @@ export interface TypeDependency {
   line?: number;
 }
 
+// NEW: Track who imports this symbol
+export interface SymbolImport {
+  filePath: string;
+  symbolName: string | null; // null = file-level import
+  line: number;
+  context: "import" | "re_export";
+}
+
+// NEW: Track where this symbol is referenced/used
+export interface SymbolReference {
+  filePath: string;
+  symbolName: string | null; // null = file-level reference
+  line: number;
+  context:
+    | "usage"
+    | "parameter"
+    | "type_annotation"
+    | "jsx"
+    | "assignment"
+    | "return"
+    | "extends"
+    | "implements"
+    | "type_parameter";
+}
+
 export interface RelationshipData {
   inherits_from?: string[];
   implements?: string[];
@@ -22,7 +47,12 @@ export interface RelationshipData {
   type_deps?: TypeDependency[];
   used_by?: CodeRelationship[];
   imports?: string[];
-  imported_by?: string[];
+  
+  // NEW: Comprehensive relationship tracking
+  imported_by?: SymbolImport[];
+  referenced_in?: SymbolReference[];
+  used_in_types?: SymbolReference[];
+  re_exported_by?: Array<{ filePath: string; line: number }>;
 }
 
 export interface ParsedCodeChunk {
@@ -61,6 +91,16 @@ const CODE_EXTENSIONS = new Set(
 
 // Cache for TypeScript programs to avoid recreating for every file
 const programCache = new Map<string, ts.Program>();
+
+// Symbol registry to track all symbol definitions and their uses across the codebase
+export interface SymbolRegistry {
+  [symbolName: string]: {
+    definitions: ParsedCodeChunk[];
+    imports: SymbolImport[];
+    references: SymbolReference[];
+    typeReferences: SymbolReference[];
+  };
+}
 
 export function parseCodeFile(filePath: string): ParsedCodeChunk[] {
   const absoluteFilePath = ts.sys.resolvePath(filePath);
@@ -475,4 +515,184 @@ export function parseCodeFile(filePath: string): ParsedCodeChunk[] {
   visit(sourceFile);
 
   return chunks;
+}
+
+/**
+ * Extract all import statements from a source file
+ * Returns a map of symbol names to where they're imported
+ */
+export function extractImports(
+  filePath: string,
+  sourceFile: ts.SourceFile,
+  projectRoot: string,
+): Map<string, SymbolImport[]> {
+  const imports = new Map<string, SymbolImport[]>();
+
+  function visitImportDeclaration(node: ts.ImportDeclaration) {
+    const lineNumber = sourceFile.getLineAndCharacterOfPosition(node.getStart()).line + 1;
+
+    if (ts.isImportDeclaration(node)) {
+      const importClause = node.importClause;
+
+      if (importClause) {
+        // Named imports: import { MealCard, Config } from "..."
+        if (importClause.namedBindings && ts.isNamedImports(importClause.namedBindings)) {
+          importClause.namedBindings.elements.forEach((element) => {
+            const importedName = element.name.text;
+            const symbolImport: SymbolImport = {
+              filePath: path.relative(projectRoot, filePath),
+              symbolName: null, // File-level import
+              line: lineNumber,
+              context: "import",
+            };
+
+            if (!imports.has(importedName)) {
+              imports.set(importedName, []);
+            }
+            imports.get(importedName)!.push(symbolImport);
+          });
+        }
+
+        // Default import: import MealCard from "..."
+        if (importClause.name) {
+          const importedName = importClause.name.text;
+          const symbolImport: SymbolImport = {
+            filePath: path.relative(projectRoot, filePath),
+            symbolName: null,
+            line: lineNumber,
+            context: "import",
+          };
+
+          if (!imports.has(importedName)) {
+            imports.set(importedName, []);
+          }
+          imports.get(importedName)!.push(symbolImport);
+        }
+
+        // Namespace import: import * as Config from "..."
+        if (importClause.namedBindings && ts.isNamespaceImport(importClause.namedBindings)) {
+          const importedName = importClause.namedBindings.name.text;
+          const symbolImport: SymbolImport = {
+            filePath: path.relative(projectRoot, filePath),
+            symbolName: null,
+            line: lineNumber,
+            context: "import",
+          };
+
+          if (!imports.has(importedName)) {
+            imports.set(importedName, []);
+          }
+          imports.get(importedName)!.push(symbolImport);
+        }
+      }
+    }
+  }
+
+  function visit(node: ts.Node) {
+    if (ts.isImportDeclaration(node)) {
+      visitImportDeclaration(node);
+    }
+    ts.forEachChild(node, visit);
+  }
+
+  visit(sourceFile);
+  return imports;
+}
+
+/**
+ * Extract all re-export statements from a source file
+ */
+export function extractReExports(
+  filePath: string,
+  sourceFile: ts.SourceFile,
+  projectRoot: string,
+): Map<string, Array<{ filePath: string; line: number }>> {
+  const reExports = new Map<string, Array<{ filePath: string; line: number }>>();
+
+  function visit(node: ts.Node) {
+    // export { MealCard } from "..."
+    // export { MealCard as Config } from "..."
+    if (ts.isExportDeclaration(node)) {
+      const lineNumber = sourceFile.getLineAndCharacterOfPosition(node.getStart()).line + 1;
+
+      if (node.exportClause && ts.isNamedExports(node.exportClause)) {
+        node.exportClause.elements.forEach((element) => {
+          const exportedName = element.name.text;
+          const reExportInfo = {
+            filePath: path.relative(projectRoot, filePath),
+            line: lineNumber,
+          };
+
+          if (!reExports.has(exportedName)) {
+            reExports.set(exportedName, []);
+          }
+          reExports.get(exportedName)!.push(reExportInfo);
+        });
+      }
+    }
+
+    ts.forEachChild(node, visit);
+  }
+
+  visit(sourceFile);
+  return reExports;
+}
+
+/**
+ * Build the symbol registry from parsed chunks
+ * This enriches chunks with imported_by and referenced_in relationships
+ */
+export function buildSymbolRegistry(
+  allChunks: ParsedCodeChunk[],
+  sourceFiles: Map<string, ts.SourceFile>,
+  checker: ts.TypeChecker,
+  projectRoot: string,
+): ParsedCodeChunk[] {
+  // First pass: collect all imports and re-exports
+  const allImports = new Map<string, SymbolImport[]>();
+  const allReExports = new Map<string, Array<{ filePath: string; line: number }>>();
+
+  sourceFiles.forEach((sourceFile, filePath) => {
+    const imports = extractImports(filePath, sourceFile, projectRoot);
+    const reExports = extractReExports(filePath, sourceFile, projectRoot);
+
+    imports.forEach((importList, symbolName) => {
+      if (!allImports.has(symbolName)) {
+        allImports.set(symbolName, []);
+      }
+      allImports.get(symbolName)!.push(...importList);
+    });
+
+    reExports.forEach((reExportList, symbolName) => {
+      if (!allReExports.has(symbolName)) {
+        allReExports.set(symbolName, []);
+      }
+      allReExports.get(symbolName)!.push(...reExportList);
+    });
+  });
+
+  // Second pass: enrich chunks with import/reference information
+  const enrichedChunks = allChunks.map((chunk) => {
+    const relationships = chunk.metadata.relationships || {};
+
+    // Add imported_by if this symbol is imported
+    if (allImports.has(chunk.symbolName)) {
+      relationships.imported_by = allImports.get(chunk.symbolName)!;
+    }
+
+    // Add re_exported_by if this symbol is re-exported
+    if (allReExports.has(chunk.symbolName)) {
+      relationships.re_exported_by = allReExports.get(chunk.symbolName)!;
+    }
+
+    return {
+      ...chunk,
+      metadata: {
+        ...chunk.metadata,
+        relationships: Object.keys(relationships).length > 0 ? relationships : undefined,
+      },
+    };
+  });
+
+  return enrichedChunks;
 }

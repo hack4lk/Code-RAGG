@@ -82,6 +82,31 @@ export function buildCodeContext(
         result.content,
       ].join("\n"),
     );
+
+    // If this result has imported_by information, add a separate section
+    if (
+      result.metadata?.relationships?.imported_by &&
+      Array.isArray(result.metadata.relationships.imported_by)
+    ) {
+      const importedBy = result.metadata.relationships.imported_by;
+      const importSummary = importedBy
+        .map(
+          (imp: any) =>
+            `  - Line ${imp.line}: ${imp.filePath}`,
+        )
+        .join("\n");
+
+      sections.push(
+        [
+          "IMPORTED BY",
+          "===========",
+          "",
+          `This symbol is imported in ${importedBy.length} location(s):`,
+          "",
+          importSummary,
+        ].join("\n"),
+      );
+    }
   }
 
   return {

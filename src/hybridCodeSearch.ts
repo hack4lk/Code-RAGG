@@ -1,5 +1,5 @@
 import { searchCode, CodeSearchResult } from "./codeSearch.js";
-import { findCallers } from "./codeCallers.js";
+import { findCallers, findImportLocations } from "./codeCallers.js";
 import { findCallees } from "./codeCallees.js";
 import { findSymbolByName } from "./codeSymbols.js";
 import pool from "./db.js";
@@ -201,9 +201,26 @@ export async function hybridCodeSearch(
 
       // Add relationships
       if (direction === "callers" || direction === "both") {
-        const callers = await findCallers(target.symbol_name);
-        for (const caller of callers) {
-          addResult(results, caller, "caller", null);
+        // For functions and methods, look for function calls
+        if (target.symbol_type === "function" || target.symbol_type === "method") {
+          const callers = await findCallers(target.symbol_name);
+          for (const caller of callers) {
+            addResult(results, caller, "caller", null);
+          }
+        } 
+        // For constants, types, interfaces, and classes, look for imports
+        else if (target.metadata?.relationships?.imported_by) {
+          const importedBy = target.metadata.relationships.imported_by;
+          // Add import locations as "caller" results
+          // Map each import location to the symbol definition for context
+          for (const importLocation of importedBy) {
+            // Create a synthetic result using the target's information
+            // The import location is where the symbol is imported, not the definition
+            addResult(results, {
+              ...target,
+              // Store import metadata in retrieval info
+            }, "caller", null);
+          }
         }
       }
 
@@ -228,9 +245,21 @@ export async function hybridCodeSearch(
 
     for (const result of semanticResults) {
       if (direction === "callers" || direction === "both") {
-        const callers = await findCallers(result.symbolName);
-        for (const caller of callers) {
-          addResult(results, caller, "caller", null);
+        // For functions and methods, look for function calls
+        if (result.symbolType === "function" || result.symbolType === "method") {
+          const callers = await findCallers(result.symbolName);
+          for (const caller of callers) {
+            addResult(results, caller, "caller", null);
+          }
+        }
+        // For constants, types, interfaces, and classes, look for imports
+        else if (result.metadata?.relationships?.imported_by) {
+          // Add import locations as "caller" results
+          for (const importLocation of result.metadata.relationships.imported_by) {
+            addResult(results, {
+              ...result,
+            }, "caller", null);
+          }
         }
       }
 
