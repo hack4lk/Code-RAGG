@@ -36,19 +36,19 @@ export const logger = {
 
   warn: (message: string, data?: any) => {
     if (shouldLog('warn')) {
-      console.warn(formatLog('warn', message, data));
+      console.error(formatLog('warn', message, data));
     }
   },
 
   info: (message: string, data?: any) => {
     if (shouldLog('info')) {
-      console.log(formatLog('info', message, data));
+      console.error(formatLog('info', message, data));
     }
   },
 
   debug: (message: string, data?: any) => {
     if (shouldLog('debug')) {
-      console.log(formatLog('debug', message, data));
+      console.error(formatLog('debug', message, data));
     }
   },
 

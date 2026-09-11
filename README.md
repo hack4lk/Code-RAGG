@@ -339,7 +339,127 @@ For more detailed API specifications, refer to [API Documentation](./documents/a
 
 Refer to [API Documentation](./documents/api.md) for detailed endpoint specifications.
 
-### Web Interface
+## MCP (Model Context Protocol) Integration
+
+Code-RAGG implements the **Model Context Protocol** to integrate seamlessly with any application that allowes for MCP access, allowing you to search your codebase and documentation directly from the Copilot/Claude chat interface.
+
+[example MCP call]
+![Web Interface](./screenshots/mcp.png)
+
+### MCP Configuration
+
+Example Copilot MCP server is configured in `.vscode/mcp.json`:
+
+```json
+{
+  "servers": {
+    "code-ragg": {
+      "command": "/path/to/your/npm/binary",
+      "args": ["run", "mcp"],
+      "cwd": "/path/to/where/you/have/code-ragg/codebase"
+    }
+  }
+}
+```
+
+**How it works:**
+
+1. When you open VS Code in this workspace, it reads `mcp.json`
+2. It launches the MCP server by running `npm run mcp`
+3. GitHub Copilot detects the available tools and registers them
+4. You can now use the search tools directly in Copilot chat
+
+### Using MCP with GitHub Copilot
+
+Once the MCP server is running, you can use it in Copilot Chat with either:
+
+#### Option 1: Reference the server explicitly
+
+Start your question with `#code-ragg`:
+
+```
+#code-ragg what parameters are passed to the AppHeader component?
+```
+
+#### Option 2: Let Copilot choose automatically
+
+Ask a question naturally about your codebase, and Copilot will automatically decide whether to use the MCP tools:
+
+```
+How is the MealCard component used throughout the codebase?
+```
+
+### Available MCP Tools
+
+Code-RAGG exposes 2 MCP tools:
+
+#### 1. `search_code`
+
+Search your code index using semantic meaning or symbol names.
+
+**Parameters:**
+
+- `query` (required): Search query or symbol name (e.g., "authentication", "parseCodeFile")
+- `limit` (optional): Maximum number of code chunks to return (default: 10)
+- `include_callers` (optional): Include functions/methods that call the found symbols (default: false)
+- `include_callees` (optional): Include functions/methods that are called by the found symbols (default: false)
+
+**Example usage:**
+
+```
+#code-ragg @search_code What functions handle user authentication?
+```
+
+**Returns:**
+
+- Code chunks with symbols and their metadata
+- Architectural roles (data_contract, config, etc.)
+- Dependencies and external calls
+- Call graph relationships
+
+#### 2. `search_documents`
+
+Search your documentation index using hybrid search (vector similarity + keyword matching).
+
+**Parameters:**
+
+- `query` (required): Search query or question about the documentation
+- `limit` (optional): Maximum number of results to return (default: 10)
+- `search_type` (optional): Search method - "vector", "keyword", or "hybrid" (default: hybrid)
+
+**Example usage:**
+
+```
+#code-ragg @search_documents How do I configure the database?
+```
+
+**Returns:**
+
+- Relevant documentation chunks ranked by relevance score
+- Document source and chunk index
+- Retrieval method used (vector or keyword)
+
+### Troubleshooting MCP
+
+**Server not showing up in Copilot:**
+
+1. Ensure `mcp.json` exists in `.vscode/` directory
+2. Restart VS Code (Cmd+Q and reopen)
+3. Check the MCP output panel: Command Palette → "MCP: Show Output"
+
+**Tools not being called:**
+
+- Verify the server is running: Look for `#code-ragg` dropdown in Copilot chat
+- Check that your codebase has been ingested: Run `npm run ingestCode` and `npm run ingest`
+- Try using `#code-ragg` explicitly to reference the server
+
+**Connection issues:**
+
+- Ensure `npm run mcp` starts successfully
+- Check that ports are not conflicting
+- Verify your database is populated with indexed code
+
+## Web Interface
 
 ![Web Interface](./screenshots/code_assistant.gif)
 
